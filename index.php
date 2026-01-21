@@ -237,7 +237,7 @@ foreach ($folders as $folder) {
         'title'       => $meta['title'] ?? $folder,
         'desc'        => $meta['description'] ?? '',
         'author'      => $meta['author'] ?? 'System',
-        'category'    => $meta['category'] ?? 'General',
+        'category'    => $meta['category'] ?? null,
         'status'      => $status,
         'statusManual'=> !empty($meta['status']),
         'tags'        => isset($meta['tags']) ? array_map('trim', explode(',', $meta['tags'])) : [],
@@ -526,6 +526,15 @@ $jsonData = json_encode([
                     <button @click="filterCat = ''" x-show="filterCat" class="text-[10px] text-brand-500 hover:underline" x-text="t('reset')"></button>
                 </div>
                 <div class="space-y-1">
+                    <!-- Default category (Allgemein/General) wenn Projekte ohne Kategorie existieren -->
+                    <template x-if="_hasDefaultCategory">
+                        <button @click="filterCat = filterCat === '__default__' ? '' : '__default__'; sidebarOpen = false"
+                                :class="filterCat === '__default__' ? 'bg-brand-500 text-white shadow-md shadow-brand-500/20' : 'text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'"
+                                class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-all flex justify-between items-center group">
+                            <span x-text="t('categoryPlaceholder')"></span>
+                            <span class="text-[10px] opacity-60 bg-white/20 px-1.5 rounded-md" x-text="countByCat(null)"></span>
+                        </button>
+                    </template>
                     <template x-for="cat in categories" :key="cat">
                         <button @click="filterCat = filterCat === cat ? '' : cat; sidebarOpen = false"
                                 :class="filterCat === cat ? 'bg-brand-500 text-white shadow-md shadow-brand-500/20' : 'text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'"
@@ -647,7 +656,7 @@ $jsonData = json_encode([
                                         <i class="fas fa-code"></i>
                                     </div>
                                 </template>
-                                <div class="absolute bottom-3 right-3 px-2 py-1 bg-white/90 dark:bg-zinc-900/90 backdrop-blur rounded-md text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-zinc-200 shadow-sm" x-text="p.category"></div>
+                                <div class="absolute bottom-3 right-3 px-2 py-1 bg-white/90 dark:bg-zinc-900/90 backdrop-blur rounded-md text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-zinc-200 shadow-sm" x-text="p.category || t('categoryPlaceholder')"></div>
                             </div>
 
                             <div class="p-5 flex flex-col flex-1">
@@ -715,7 +724,7 @@ $jsonData = json_encode([
                                     </span>
                                 </td>
                                 <td class="p-3 hidden md:table-cell">
-                                    <span class="text-xs font-medium text-slate-500 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700 px-2 py-1 rounded-md" x-text="p.category"></span>
+                                    <span class="text-xs font-medium text-slate-500 dark:text-zinc-300 border border-slate-200 dark:border-zinc-700 px-2 py-1 rounded-md" x-text="p.category || t('categoryPlaceholder')"></span>
                                 </td>
                                 <td class="p-3 text-sm text-slate-500 dark:text-zinc-400 hidden sm:table-cell" x-text="p.modified_fmt"></td>
                                 <td class="p-3 text-right pr-4">
@@ -908,7 +917,9 @@ $jsonData = json_encode([
         function dashboard(initialData) {
             return {
                 projects: initialData.projects,
-                categories: initialData.categories,
+                // Kategorien: null-Werte durch spezielle Markierung ersetzen für Filter
+                _hasDefaultCategory: initialData.categories.includes(null),
+                categories: initialData.categories.filter(c => c !== null),
                 tags: initialData.tags,
                 isAdmin: initialData.isAdmin || false,
                 
@@ -982,7 +993,8 @@ $jsonData = json_encode([
                     return this.projects.filter(p => {
                         const s = this.search.toLowerCase();
                         const matchesSearch = !s || p.title.toLowerCase().includes(s) || p.desc.toLowerCase().includes(s) || p.folder.toLowerCase().includes(s) || p.tags.some(t => t.toLowerCase().includes(s));
-                        const matchesCat = !this.filterCat || p.category === this.filterCat;
+                        const matchesCat = !this.filterCat || 
+                            (this.filterCat === '__default__' ? p.category === null : p.category === this.filterCat);
                         const matchesTag = !this.filterTag || p.tags.includes(this.filterTag);
                         return matchesSearch && matchesCat && matchesTag;
                     });
@@ -1003,7 +1015,7 @@ $jsonData = json_encode([
                             case 'title_desc':
                                 return b.title.localeCompare(a.title, 'de');
                             case 'category':
-                                return a.category.localeCompare(b.category, 'de') || b.modified - a.modified;
+                                return (a.category || '').localeCompare(b.category || '', 'de') || b.modified - a.modified;
                             case 'status':
                                 const statusOrder = { 'active': 0, 'stable': 1, 'in development': 2, 'idle': 3, 'archive': 4, 'completed': 5 };
                                 return (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99) || b.modified - a.modified;
@@ -1029,6 +1041,11 @@ $jsonData = json_encode([
 
                 countByCat(cat) {
                     return this.projects.filter(p => p.category === cat).length;
+                },
+
+                // Kategorie-Anzeige mit Übersetzung für Default
+                getCategoryDisplay(category) {
+                    return category || this.t('categoryPlaceholder');
                 },
 
                 resetFilters() {
@@ -1107,7 +1124,7 @@ $jsonData = json_encode([
                         title: project.title === project.folder ? '' : project.title,
                         description: project.desc || '',
                         author: project.author === 'System' ? '' : project.author,
-                        category: project.category === this.t('categoryPlaceholder') ? '' : project.category,
+                        category: project.category || '',
                         status: project.statusManual ? project.status : '',
                         tags: project.tags.join(', '),
                         url: project.url.endsWith('/') && project.url === project.folder + '/' ? '' : project.url,
@@ -1220,7 +1237,7 @@ $jsonData = json_encode([
                                 this.projects[idx].title = this.editForm.title || this.editProject.folder;
                                 this.projects[idx].desc = this.editForm.description;
                                 this.projects[idx].author = this.editForm.author || 'System';
-                                this.projects[idx].category = this.editForm.category || this.t('categoryPlaceholder');
+                                this.projects[idx].category = this.editForm.category || null;
                                 this.projects[idx].status = this.editForm.status || this.editProject.status;
                                 this.projects[idx].statusManual = !!this.editForm.status;
                                 this.projects[idx].tags = this.editForm.tags ? this.editForm.tags.split(',').map(t => t.trim()) : [];
