@@ -967,8 +967,8 @@ $jsonData = json_encode([
                     // Watchers für Persistenz
                     this.$watch('view', val => localStorage.setItem('devhub_view', val));
                     this.$watch('isDark', val => localStorage.setItem('devhub_theme', val ? 'dark' : 'light'));
-
-                    // Escape schließt Modals und Sidebar
+                    
+                        // Escape schließt Modals und Sidebar
                     document.addEventListener('keydown', (e) => {
                         if (e.key === 'Escape') {
                             this.showLoginModal = false;
@@ -1107,7 +1107,7 @@ $jsonData = json_encode([
                         title: project.title === project.folder ? '' : project.title,
                         description: project.desc || '',
                         author: project.author === 'System' ? '' : project.author,
-                        category: project.category === 'General' ? '' : project.category,
+                        category: project.category === this.t('categoryPlaceholder') ? '' : project.category,
                         status: project.statusManual ? project.status : '',
                         tags: project.tags.join(', '),
                         url: project.url.endsWith('/') && project.url === project.folder + '/' ? '' : project.url,
@@ -1220,7 +1220,7 @@ $jsonData = json_encode([
                                 this.projects[idx].title = this.editForm.title || this.editProject.folder;
                                 this.projects[idx].desc = this.editForm.description;
                                 this.projects[idx].author = this.editForm.author || 'System';
-                                this.projects[idx].category = this.editForm.category || 'General';
+                                this.projects[idx].category = this.editForm.category || this.t('categoryPlaceholder');
                                 this.projects[idx].status = this.editForm.status || this.editProject.status;
                                 this.projects[idx].statusManual = !!this.editForm.status;
                                 this.projects[idx].tags = this.editForm.tags ? this.editForm.tags.split(',').map(t => t.trim()) : [];
