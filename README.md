@@ -1,6 +1,6 @@
 # DevHub
 
-DevHub ist ein leichtgewichtiges Single-File-Dashboard für deine lokale Entwicklungsumgebung. Es scannt dein Root-Verzeichnis automatisch und verwandelt eine Liste von Ordnern in eine moderne, durchsuchbare Projektübersicht mit Metadaten und Status-Tracking.
+DevHub is a lightweight single-file dashboard for your local development environment. It automatically scans your root directory and transforms a list of folders into a modern, searchable project overview with metadata and status tracking.
 
 ![PHP](https://img.shields.io/badge/PHP-8.0+-777BB4?style=flat-square&logo=php&logoColor=white)
 ![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-3.x-38B2AC?style=flat-square&logo=tailwind-css&logoColor=white)
@@ -8,52 +8,53 @@ DevHub ist ein leichtgewichtiges Single-File-Dashboard für deine lokale Entwick
 
 ## ✨ Features
 
-- **Automatische Projekt-Erkennung** - Scannt alle Unterordner und zeigt sie als Projekt-Karten an
-- **Metadaten via `project.ini`** - Titel, Beschreibung, Autor, Kategorie, Tags und mehr
-- **Intelligente Status-Erkennung** - Automatische Klassifizierung basierend auf letzter Änderung
-- **Admin-Bereich** - Geschützter Bereich zum Bearbeiten von Projekt-Metadaten
-- **Thumbnail-Upload** - Bilder per Drag & Drop hochladen
-- **Dark Mode** - Automatische Erkennung + manueller Toggle
-- **Filter & Suche** - Nach Kategorie, Tags und Freitext
-- **Sortierung** - Nach Datum, Name, Kategorie oder Status
-- **Responsive Design** - Optimiert für Desktop und Tablet
-- **Pinned Projects** - Wichtige Projekte oben anpinnen
-- **Versteckte Projekte** - Projekte nur für Admins sichtbar machen
+- **Automatic Project Detection** - Scans all subfolders and displays them as project cards
+- **Metadata via `project.ini`** - Title, description, author, category, tags, and more
+- **Smart Status Detection** - Automatic classification based on last modification
+- **Admin Area** - Protected area for editing project metadata
+- **Thumbnail Upload** - Upload images via drag & drop
+- **Dark Mode** - Automatic detection + manual toggle
+- **Filter & Search** - By category, tags, and free text
+- **Sorting** - By date, name, category, or status
+- **Responsive Design** - Optimized for all devices and resolutions
+- **Pinned Projects** - Pin important projects to the top
+- **Hidden Projects** - Make projects visible only to admins
+- **Multi-Language** - Automatic language detection (English/German) based on browser settings
 
 ## 📦 Installation
 
-### Voraussetzungen
+### Requirements
 
-- PHP 8.0 oder höher
-- Webserver (Apache, Nginx, XAMPP, etc.)
+- PHP 8.0 or higher
+- Web server (Apache, Nginx, XAMPP, etc.)
 
-### Einrichtung
+### Setup
 
-1. **Repository herunterladen**
+1. **Download Repository**
    ```bash
-   # Option 1: Git klonen (falls Git installiert ist)
-   git clone https://github.com/IhrUsername/DevHub.git
+   # Option 1: Git clone (if Git is installed)
+   git clone https://github.com/YourUsername/DevHub.git
 
-   # Option 2: ZIP herunterladen und entpacken von GitHub
+   # Option 2: Download and extract ZIP from GitHub
    ```
 
-2. **In das Web-Verzeichnis verschieben**
+2. **Move to Web Directory**
 
-   **Für XAMPP (Windows):**
-   - Kopieren Sie den `DevHub`-Ordner nach `C:\xampp\htdocs\dev\`
-   - Oder verwenden Sie den Windows Explorer zum Verschieben
+   **For XAMPP (Windows):**
+   - Copy the `DevHub` folder to `C:\xampp\htdocs\dev\`
+   - Or use Windows Explorer to move it
 
-   **Für andere Webserver:**
+   **For other web servers:**
    ```bash
-   # Linux/Mac Beispiel
+   # Linux/Mac example
    mv DevHub /var/www/html/dev/
    ```
 
-3. **Konfiguration erstellen**
+3. **Create Configuration**
 
    **Windows:**
-   - Kopieren Sie `config.sample.php` zu `config.php`
-   - Oder verwenden Sie die Eingabeaufforderung:
+   - Copy `config.sample.php` to `config.php`
+   - Or use the command prompt:
    ```cmd
    copy config.sample.php config.php
    ```
@@ -63,101 +64,109 @@ DevHub ist ein leichtgewichtiges Single-File-Dashboard für deine lokale Entwick
    cp config.sample.php config.php
    ```
 
-4. **Konfiguration anpassen**
+4. **Customize Configuration**
 
-   Öffnen Sie `config.php` in einem Texteditor und ändern Sie mindestens das Admin-Passwort:
+   Open `config.php` in a text editor and change at least the admin password:
    ```php
-   define('ADMIN_PASSWORD', 'IhrSicheresPasswort!');
+   define('ADMIN_PASSWORD', 'YourSecurePassword!');
    ```
 
-5. **Im Browser öffnen**
+5. **Open in Browser**
    ```
    http://localhost/dev/DevHub/
    ```
 
-## ⚙️ Konfiguration
+## ⚙️ Configuration
 
-Alle Einstellungen befinden sich in der `config.php`:
+All settings are located in `config.php`:
 
-| Einstellung | Beschreibung | Standard |
-|-------------|--------------|----------|
-| `ADMIN_PASSWORD` | Passwort für den Admin-Bereich | - |
-| `SITE_TITLE` | Titel in der Sidebar | DevHub |
-| `SITE_SUBTITLE` | Untertitel | Local Development Environment |
-| `META_TITLE` | Browser-Tab Titel | DevHub - Übersicht |
-| `META_DESCRIPTION` | Meta-Beschreibung | - |
-| `$ignore` | Ignorierte Ordner | `.git`, `node_modules`, `vendor` |
-| `$valid_img` | Gültige Thumbnail-Formate | jpg, png, webp, gif, svg |
-| `STATUS_STABLE_DAYS` | Tage bis Status "stabil" | 7 |
-| `STATUS_IDLE_DAYS` | Tage bis Status "ruht" | 30 |
-| `STATUS_ARCHIVE_DAYS` | Tage bis Status "archiv" | 90 |
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `ADMIN_PASSWORD` | Password for the admin area | - |
+| `SITE_TITLE` | Title in the sidebar | DevHub |
+| `SITE_SUBTITLE` | Subtitle | Local Development |
+| `META_TITLE` | Browser tab title | DevHub - Overview |
+| `META_DESCRIPTION` | Meta description | - |
+| `$ignore` | Ignored folders | `.git`, `node_modules`, `vendor` |
+| `$valid_img` | Valid thumbnail formats | jpg, png, webp, gif, svg |
+| `STATUS_STABLE_DAYS` | Days until status "stable" | 7 |
+| `STATUS_IDLE_DAYS` | Days until status "idle" | 30 |
+| `STATUS_ARCHIVE_DAYS` | Days until status "archive" | 90 |
 
-## 📁 Projekt-Metadaten
+## 📁 Project Metadata
 
-Jedes Projekt kann eine `project.ini` Datei im Wurzelverzeichnis haben:
+Each project can have a `project.ini` file in its root directory:
 
 ```ini
-title = "Mein Projekt"
-description = "Eine kurze Beschreibung des Projekts"
-author = "Max Mustermann"
+title = "My Project"
+description = "A short description of the project"
+author = "John Doe"
 category = "Web App"
-status = "aktiv"
+status = "active"
 tags = "php, mysql, api"
 url = "https://example.com"
 pinned = "true"
 hidden = "false"
 ```
 
-### Verfügbare Felder
+### Available Fields
 
-| Feld | Beschreibung |
-|------|--------------|
-| `title` | Anzeigename (Standard: Ordnername) |
-| `description` | Kurze Beschreibung |
-| `author` | Autor/Entwickler |
-| `category` | Kategorie für Filter |
-| `status` | Manueller Status (überschreibt Auto-Erkennung) |
-| `tags` | Komma-getrennte Tags |
-| `url` | Externe URL (statt Inhalt des Ordners) |
-| `pinned` | `true` = Projekt wird oben angezeigt |
-| `hidden` | `true` = Nur für Admins sichtbar |
+| Field | Description |
+|-------|-------------|
+| `title` | Display name (default: folder name) |
+| `description` | Short description |
+| `author` | Author/Developer |
+| `category` | Category for filtering |
+| `status` | Manual status (overrides auto-detection) |
+| `tags` | Comma-separated tags |
+| `url` | External URL (instead of folder content) |
+| `pinned` | `true` = Project is displayed at the top |
+| `hidden` | `true` = Only visible to admins |
 
-### Status-Werte
+### Status Values
 
-- **aktiv** - Wird gerade bearbeitet (< 7 Tage inaktiv)
-- **stabil** - Funktioniert, wenig Änderungen (7-30 Tage)
-- **ruht** - Längere Zeit nicht bearbeitet (30-90 Tage)
-- **archiv** - Sehr alt, möglicherweise veraltet (> 90 Tage)
-- **abgeschlossen** - Fertiggestellt
-- **in entwicklung** - In aktiver Entwicklung
+- **active** - Currently being worked on (< 7 days inactive)
+- **stable** - Working, few changes (7-30 days)
+- **idle** - Not worked on for a while (30-90 days)
+- **archive** - Very old, possibly outdated (> 90 days)
+- **completed** - Finished
+- **in development** - In active development
 
 ## 🖼️ Thumbnails
 
-Legen Sie ein Bild mit dem Namen `thumbnail.jpg` (oder .png, .webp, .gif, .svg) im Projektordner ab, um eine Vorschau anzuzeigen.
+Place an image named `thumbnail.jpg` (or .png, .webp, .gif, .svg) in the project folder to display a preview.
 
-Alternativ können Sie als eingeloggter Admin Thumbnails direkt über die Bearbeitungsfunktion hochladen.
+Alternatively, as a logged-in admin, you can upload thumbnails directly through the edit function.
 
-## 🔐 Admin-Bereich
+## 🔐 Admin Area
 
-1. Klicken Sie auf das Schloss-Symbol oben rechts
-2. Geben Sie das in `config.php` definierte Passwort ein
-3. Als Admin können Sie:
-   - Projekt-Metadaten bearbeiten
-   - Thumbnails hochladen/entfernen
-   - Versteckte Projekte sehen
+1. Click the lock icon in the top right corner
+2. Enter the password defined in `config.php`
+3. As admin you can:
+   - Edit project metadata
+   - Upload/remove thumbnails
+   - See hidden projects
 
-## 🎨 Anpassung
+## 🌐 Language Support
 
-### Ordner ausblenden
+DevHub automatically detects your browser language and displays the interface in:
+- **German** - For browsers with German language settings
+- **English** - For all other languages
 
-Ordner, die mit `_` (Unterstrich) beginnen, werden automatisch ignoriert.
+You can manually switch the language using the language toggle button (DE/EN) in the header.
 
-Zusätzlich können Sie in der `config.php` weitere Ordner zur `$ignore`-Liste hinzufügen.
+## 🎨 Customization
+
+### Hide Folders
+
+Folders starting with `_` (underscore) are automatically ignored.
+
+Additionally, you can add more folders to the `$ignore` list in `config.php`.
 
 ### Theme
 
-Das Dashboard unterstützt Light und Dark Mode. Der Modus wird im Browser gespeichert.
+The dashboard supports Light and Dark mode. The mode is saved in the browser.
 
-## 📝 Lizenz
+## 📝 License
 
-MIT License - Frei verwendbar für private und kommerzielle Projekte.
+MIT License - Free to use for personal and commercial projects.

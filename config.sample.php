@@ -1,59 +1,59 @@
 <?php
 /**
- * DevHub Konfiguration - BEISPIELDATEI
+ * DevHub Configuration - SAMPLE FILE
  * 
- * Kopieren Sie diese Datei nach "config.php" und passen Sie die Werte an.
- * Die config.php sollte NICHT in Git eingecheckt werden!
+ * Copy this file to "config.php" and adjust the values.
+ * The config.php should NOT be committed to Git!
  * 
- * Anleitung:
- * 1. Kopieren: config.sample.php -> config.php
- * 2. Passwort ändern
- * 3. Einstellungen nach Bedarf anpassen
+ * Instructions:
+ * 1. Copy: config.sample.php -> config.php
+ * 2. Change password
+ * 3. Adjust settings as needed
  */
 
 // ============================================
-// SICHERHEIT
+// SECURITY
 // ============================================
 
-// Admin-Passwort für den geschützten Bereich
-// WICHTIG: Bitte ändern Sie dieses Passwort!
-define('ADMIN_PASSWORD', 'IhrSicheresPasswort123!');
+// Admin password for the protected area
+// IMPORTANT: Please change this password!
+define('ADMIN_PASSWORD', 'YourSecurePassword123!');
 
 // ============================================
-// SEITEN-EINSTELLUNGEN
+// PAGE SETTINGS
 // ============================================
 
-// Titel der Anwendung (wird in der Sidebar angezeigt)
+// Application title (displayed in the sidebar)
 define('SITE_TITLE', 'DevHub');
 
-// Untertitel (wird unter dem Titel angezeigt)
+// Subtitle (displayed below the title)
 define('SITE_SUBTITLE', 'Local Development');
 
-// Meta-Titel für den Browser-Tab
-define('META_TITLE', 'DevHub - Übersicht');
+// Meta title for the browser tab
+define('META_TITLE', 'DevHub - Overview');
 
-// Meta-Beschreibung für SEO
-define('META_DESCRIPTION', 'Zentrale Übersicht aller lokalen Entwicklungsprojekte');
+// Meta description for SEO
+define('META_DESCRIPTION', 'Central overview of all local development projects');
 
 // ============================================
-// ORDNER-EINSTELLUNGEN
+// FOLDER SETTINGS
 // ============================================
 
-// Ordner und Dateien, die ignoriert werden sollen
+// Folders and files to ignore
 $ignore = ['.', '..', '.git', 'node_modules', 'vendor'];
 
-// Gültige Bildformate für Thumbnails
+// Valid image formats for thumbnails
 $valid_img = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'];
 
 // ============================================
-// STATUS-EINSTELLUNGEN (für automatische Erkennung)
+// STATUS SETTINGS (for automatic detection)
 // ============================================
 
-// Tage bis ein Projekt als "stabil" gilt (nach letzter Änderung)
+// Days until a project is considered "stable" (after last modification)
 define('STATUS_STABLE_DAYS', 7);
 
-// Tage bis ein Projekt als "ruht" gilt
+// Days until a project is considered "idle"
 define('STATUS_IDLE_DAYS', 30);
 
-// Tage bis ein Projekt als "archiv" gilt
+// Days until a project is considered "archive"
 define('STATUS_ARCHIVE_DAYS', 90);
