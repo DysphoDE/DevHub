@@ -1,0 +1,16 @@
+# Konfiguration mit sensiblen Daten
+config.php
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
