@@ -144,6 +144,7 @@ Alternatively, as a logged-in admin, you can upload thumbnails directly through 
 2. Enter the password defined in `config.php`
 3. As admin you can:
    - Edit project metadata
+   - Add new projects
    - Upload/remove thumbnails
    - See hidden projects
 
