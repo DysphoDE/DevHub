@@ -151,9 +151,9 @@ Alternatively, as a logged-in admin, you can upload thumbnails directly through 
 
 DevHub automatically detects your browser language and displays the interface in:
 - **German** - For browsers with German language settings
+- **Spanish** - For browsers with Spanish language settings
+- **French** - For browsers with French language settings
 - **English** - For all other languages
-
-You can manually switch the language using the language toggle button (DE/EN) in the header.
 
 ## 🎨 Customization
 

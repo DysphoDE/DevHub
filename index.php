@@ -99,6 +99,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
+    // Neues Projekt/Ordner erstellen
+    if ($_POST['action'] === 'create_project') {
+        $folder = preg_replace('/[^a-zA-Z0-9_\-]/', '', $_POST['folder'] ?? '');
+        
+        if (empty($folder)) {
+            echo json_encode(['success' => false, 'error' => 'Ordnername darf nicht leer sein']);
+            exit;
+        }
+        
+        $folder_path = $current_dir . '/' . $folder;
+        
+        if (is_dir($folder_path)) {
+            echo json_encode(['success' => false, 'error' => 'Ordner existiert bereits']);
+            exit;
+        }
+        
+        if (!mkdir($folder_path, 0755, true)) {
+            echo json_encode(['success' => false, 'error' => 'Ordner konnte nicht erstellt werden']);
+            exit;
+        }
+        
+        // project.ini erstellen
+        $ini_content = "";
+        $fields = ['title', 'description', 'author', 'category', 'status', 'tags', 'url', 'pinned', 'hidden'];
+        foreach ($fields as $field) {
+            if (isset($_POST[$field]) && $_POST[$field] !== '') {
+                $value = str_replace('"', '\\"', $_POST[$field]);
+                $ini_content .= "$field = \"$value\"\n";
+            }
+        }
+        
+        if (!empty($ini_content)) {
+            file_put_contents($folder_path . '/project.ini', $ini_content);
+        }
+        
+        echo json_encode(['success' => true, 'folder' => $folder]);
+        exit;
+    }
+
     // Thumbnail entfernen
     if ($_POST['action'] === 'delete_thumbnail') {
         $folder = basename($_POST['folder'] ?? '');
@@ -231,6 +270,10 @@ foreach ($folders as $folder) {
     // Hidden-Status auslesen
     $hidden = isset($meta['hidden']) && (strtolower($meta['hidden']) === 'true' || $meta['hidden'] === '1');
 
+    // Erkennung ob externer Link
+    $projectUrl = $meta['url'] ?? "$folder/";
+    $isExternal = !empty($meta['url']) && preg_match('#^https?://#i', $meta['url']);
+
     $data[] = [
         'id'          => md5($folder),
         'folder'      => $folder,
@@ -241,7 +284,8 @@ foreach ($folders as $folder) {
         'status'      => $status,
         'statusManual'=> !empty($meta['status']),
         'tags'        => isset($meta['tags']) ? array_map('trim', explode(',', $meta['tags'])) : [],
-        'url'         => $meta['url'] ?? "$folder/",
+        'url'         => $projectUrl,
+        'isExternal'  => $isExternal,
         'thumb'       => $thumb,
         'pinned'      => $pinned,
         'hidden'      => $hidden,
@@ -372,6 +416,24 @@ $jsonData = json_encode([
                 manualStatus: 'Manually set',
                 autoStatus: 'Automatic ({days} days inactive)',
                 
+                // External links
+                externalLink: 'External Link',
+                external: 'External',
+                
+                // Create project
+                createProject: 'New Project',
+                createProjectDesc: 'Create a new project folder or add an external link.',
+                folderName: 'Folder Name',
+                folderNamePlaceholder: 'my-project',
+                folderNameHint: 'Only letters, numbers, hyphens and underscores.',
+                isExternalProject: 'External link (no local folder content)',
+                createBtn: 'Create Project',
+                creating: 'Creating...',
+                folderExists: 'Folder already exists',
+                folderEmpty: 'Folder name must not be empty',
+                createSuccess: 'Project created successfully!',
+                createFailed: 'Creation failed',
+                
                 // Errors
                 connectionError: 'Connection error',
                 loginFailed: 'Login failed',
@@ -454,19 +516,240 @@ $jsonData = json_encode([
                 manualStatus: 'Manuell gesetzt',
                 autoStatus: 'Automatisch ({days} Tage inaktiv)',
                 
+                // External links
+                externalLink: 'Externer Link',
+                external: 'Extern',
+                
+                // Create project
+                createProject: 'Neues Projekt',
+                createProjectDesc: 'Neuen Projektordner anlegen oder einen externen Link hinzufügen.',
+                folderName: 'Ordnername',
+                folderNamePlaceholder: 'mein-projekt',
+                folderNameHint: 'Nur Buchstaben, Zahlen, Bindestriche und Unterstriche.',
+                isExternalProject: 'Externer Link (kein lokaler Ordnerinhalt)',
+                createBtn: 'Projekt anlegen',
+                creating: 'Wird erstellt...',
+                folderExists: 'Ordner existiert bereits',
+                folderEmpty: 'Ordnername darf nicht leer sein',
+                createSuccess: 'Projekt erfolgreich erstellt!',
+                createFailed: 'Erstellen fehlgeschlagen',
+                
                 // Errors
                 connectionError: 'Verbindungsfehler',
                 loginFailed: 'Login fehlgeschlagen',
                 saveFailed: 'Speichern fehlgeschlagen',
                 uploadFailed: 'Upload fehlgeschlagen',
                 removeFailed: 'Entfernen fehlgeschlagen'
+            },
+            es: {
+                // Sidebar
+                search: 'Buscar',
+                searchPlaceholder: 'Buscar proyecto...',
+                categories: 'Categorías',
+                reset: 'Restablecer',
+                tags: 'Etiquetas',
+                projects: 'Proyectos',
+                
+                // Header
+                sortNewest: 'Más recientes',
+                sortOldest: 'Más antiguos',
+                sortAZ: 'A-Z',
+                sortZA: 'Z-A',
+                sortCategory: 'Categoría',
+                sortStatus: 'Estado',
+                
+                // Status
+                statusActive: 'Activo',
+                statusStable: 'Estable',
+                statusIdle: 'Inactivo',
+                statusArchive: 'Archivo',
+                statusCompleted: 'Completado',
+                statusInDev: 'En desarrollo',
+                statusAuto: 'Automático',
+                
+                // Cards
+                noDescription: 'Sin descripción disponible.',
+                noProjects: 'No se encontraron proyectos',
+                resetFilters: 'Restablecer filtros',
+                
+                // List view
+                project: 'Proyecto',
+                lastModified: 'Última modificación',
+                action: 'Acción',
+                
+                // Login Modal
+                adminLogin: 'Acceso Admin',
+                enterPassword: 'Introducir contraseña...',
+                wrongPassword: 'Contraseña incorrecta',
+                cancel: 'Cancelar',
+                login: 'Acceder',
+                
+                // Editor Modal
+                editProject: 'Editar proyecto',
+                thumbnail: 'Miniatura',
+                dragOrClick: 'Arrastra una imagen aquí o haz clic',
+                uploading: 'Subiendo...',
+                removeThumbnail: '¿Eliminar miniatura?',
+                
+                title: 'Título',
+                description: 'Descripción',
+                descriptionPlaceholder: 'Breve descripción del proyecto...',
+                author: 'Autor',
+                authorPlaceholder: 'Nombre',
+                category: 'Categoría',
+                categoryPlaceholder: 'General',
+                status: 'Estado',
+                tagsLabel: 'Etiquetas',
+                tagsPlaceholder: 'etiqueta1, etiqueta2, etiqueta3',
+                urlLabel: 'URL (opcional, para enlaces externos)',
+                urlPlaceholder: 'https://...',
+                
+                pinProject: 'Fijar proyecto',
+                hideProject: 'Oculto (solo admin)',
+                
+                savedSuccess: '¡Guardado correctamente!',
+                save: 'Guardar',
+                
+                // Tooltips
+                pinned: 'Fijado',
+                hiddenAdmin: 'Oculto (solo visible para admin)',
+                manualStatus: 'Establecido manualmente',
+                autoStatus: 'Automático ({days} días inactivo)',
+                
+                // External links
+                externalLink: 'Enlace externo',
+                external: 'Externo',
+                
+                // Create project
+                createProject: 'Nuevo proyecto',
+                createProjectDesc: 'Crear una nueva carpeta de proyecto o añadir un enlace externo.',
+                folderName: 'Nombre de carpeta',
+                folderNamePlaceholder: 'mi-proyecto',
+                folderNameHint: 'Solo letras, números, guiones y guiones bajos.',
+                isExternalProject: 'Enlace externo (sin contenido local)',
+                createBtn: 'Crear proyecto',
+                creating: 'Creando...',
+                folderExists: 'La carpeta ya existe',
+                folderEmpty: 'El nombre de carpeta no puede estar vacío',
+                createSuccess: '¡Proyecto creado correctamente!',
+                createFailed: 'Error al crear',
+                
+                // Errors
+                connectionError: 'Error de conexión',
+                loginFailed: 'Error de acceso',
+                saveFailed: 'Error al guardar',
+                uploadFailed: 'Error al subir',
+                removeFailed: 'Error al eliminar'
+            },
+            fr: {
+                // Sidebar
+                search: 'Recherche',
+                searchPlaceholder: 'Trouver un projet...',
+                categories: 'Catégories',
+                reset: 'Réinitialiser',
+                tags: 'Tags',
+                projects: 'Projets',
+                
+                // Header
+                sortNewest: 'Plus récents',
+                sortOldest: 'Plus anciens',
+                sortAZ: 'A-Z',
+                sortZA: 'Z-A',
+                sortCategory: 'Catégorie',
+                sortStatus: 'Statut',
+                
+                // Status
+                statusActive: 'Actif',
+                statusStable: 'Stable',
+                statusIdle: 'Inactif',
+                statusArchive: 'Archive',
+                statusCompleted: 'Terminé',
+                statusInDev: 'En développement',
+                statusAuto: 'Automatique',
+                
+                // Cards
+                noDescription: 'Aucune description disponible.',
+                noProjects: 'Aucun projet trouvé',
+                resetFilters: 'Réinitialiser les filtres',
+                
+                // List view
+                project: 'Projet',
+                lastModified: 'Dernière modification',
+                action: 'Action',
+                
+                // Login Modal
+                adminLogin: 'Connexion Admin',
+                enterPassword: 'Entrer le mot de passe...',
+                wrongPassword: 'Mot de passe incorrect',
+                cancel: 'Annuler',
+                login: 'Connexion',
+                
+                // Editor Modal
+                editProject: 'Modifier le projet',
+                thumbnail: 'Miniature',
+                dragOrClick: 'Glissez une image ici ou cliquez',
+                uploading: 'Téléchargement...',
+                removeThumbnail: 'Supprimer la miniature ?',
+                
+                title: 'Titre',
+                description: 'Description',
+                descriptionPlaceholder: 'Brève description du projet...',
+                author: 'Auteur',
+                authorPlaceholder: 'Nom',
+                category: 'Catégorie',
+                categoryPlaceholder: 'Général',
+                status: 'Statut',
+                tagsLabel: 'Tags',
+                tagsPlaceholder: 'tag1, tag2, tag3',
+                urlLabel: 'URL (optionnel, pour liens externes)',
+                urlPlaceholder: 'https://...',
+                
+                pinProject: 'Épingler le projet',
+                hideProject: 'Masqué (admin uniquement)',
+                
+                savedSuccess: 'Enregistré avec succès !',
+                save: 'Enregistrer',
+                
+                // Tooltips
+                pinned: 'Épinglé',
+                hiddenAdmin: 'Masqué (visible admin uniquement)',
+                manualStatus: 'Défini manuellement',
+                autoStatus: 'Automatique ({days} jours inactif)',
+                
+                // External links
+                externalLink: 'Lien externe',
+                external: 'Externe',
+                
+                // Create project
+                createProject: 'Nouveau projet',
+                createProjectDesc: 'Créer un nouveau dossier de projet ou ajouter un lien externe.',
+                folderName: 'Nom du dossier',
+                folderNamePlaceholder: 'mon-projet',
+                folderNameHint: 'Uniquement lettres, chiffres, tirets et underscores.',
+                isExternalProject: 'Lien externe (pas de contenu local)',
+                createBtn: 'Créer le projet',
+                creating: 'Création...',
+                folderExists: 'Le dossier existe déjà',
+                folderEmpty: 'Le nom du dossier ne peut pas être vide',
+                createSuccess: 'Projet créé avec succès !',
+                createFailed: 'Échec de la création',
+                
+                // Errors
+                connectionError: 'Erreur de connexion',
+                loginFailed: 'Échec de la connexion',
+                saveFailed: 'Échec de l\'enregistrement',
+                uploadFailed: 'Échec du téléchargement',
+                removeFailed: 'Échec de la suppression'
             }
         };
 
         // Detect browser language (automatic only)
         function detectLanguage() {
-            const browserLang = navigator.language || navigator.userLanguage;
-            return browserLang.startsWith('de') ? 'de' : 'en';
+            const browserLang = (navigator.language || navigator.userLanguage).toLowerCase();
+            if (browserLang.startsWith('de')) return 'de';
+            if (browserLang.startsWith('es')) return 'es';
+            if (browserLang.startsWith('fr')) return 'fr';
+            return 'en';
         }
 
         const currentLang = detectLanguage();
@@ -607,6 +890,11 @@ $jsonData = json_encode([
                     <i class="fas text-xs" :class="isDark ? 'fa-sun text-amber-400' : 'fa-moon text-brand-500'"></i>
                 </button>
 
+                <!-- Create New Project (nur Admin) -->
+                <button x-show="isAdmin" @click="openCreateModal()" class="w-8 h-8 rounded-full border border-brand-500 bg-brand-50 dark:bg-brand-500/20 flex items-center justify-center text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white dark:hover:bg-brand-500 dark:hover:text-white transition-colors" :title="t('createProject')">
+                    <i class="fas fa-plus text-xs"></i>
+                </button>
+
                 <!-- Admin Login/Logout -->
                 <button x-show="!isAdmin" @click="showLoginModal = true" class="w-8 h-8 rounded-full border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 flex items-center justify-center text-slate-400 hover:text-brand-500 dark:hover:text-brand-400 hover:border-brand-500 dark:hover:border-brand-400 transition-colors" title="Admin Login">
                     <i class="fas fa-lock text-xs"></i>
@@ -641,19 +929,24 @@ $jsonData = json_encode([
                             <i class="fas fa-eye-slash text-[10px] text-white"></i>
                         </div>
                         
+                        <!-- External Link Badge -->
+                        <div x-show="p.isExternal" class="absolute top-3 z-10 w-6 h-6 bg-indigo-500/90 backdrop-blur rounded-full flex items-center justify-center shadow-md" :style="'left: ' + (((p.pinned ? 1 : 0) + (p.hidden && isAdmin ? 1 : 0)) * 2 + 0.75) + 'rem'" :title="t('externalLink')">
+                            <i class="fas fa-external-link-alt text-[10px] text-white"></i>
+                        </div>
+                        
                         <!-- Edit Button (nur für Admin) -->
                         <button x-show="isAdmin" @click.prevent.stop="openEditor(p)" class="absolute top-3 right-3 z-20 w-8 h-8 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-lg flex items-center justify-center text-slate-500 hover:text-brand-500 hover:bg-white dark:hover:bg-zinc-700 transition-all shadow-lg opacity-0 group-hover:opacity-100">
                             <i class="fas fa-pen text-xs"></i>
                         </button>
 
-                        <a :href="p.url" target="_blank" class="flex flex-col flex-1">
+                        <a :href="p.url" :target="p.isExternal ? '_blank' : '_self'" :rel="p.isExternal ? 'noopener noreferrer' : ''" class="flex flex-col flex-1">
                             <div class="h-40 w-full relative bg-gradient-to-br from-slate-100 to-slate-200 dark:from-zinc-800 dark:to-zinc-900 overflow-hidden">
                                 <template x-if="p.thumb">
                                     <img :src="p.thumb" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
                                 </template>
                                 <template x-if="!p.thumb">
                                     <div class="absolute inset-0 flex items-center justify-center text-slate-300 dark:text-zinc-600 text-4xl">
-                                        <i class="fas fa-code"></i>
+                                        <i class="fas" :class="p.isExternal ? 'fa-external-link-alt' : 'fa-code'"></i>
                                     </div>
                                 </template>
                                 <div class="absolute bottom-3 right-3 px-2 py-1 bg-white/90 dark:bg-zinc-900/90 backdrop-blur rounded-md text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-zinc-200 shadow-sm" x-text="p.category || t('categoryPlaceholder')"></div>
@@ -714,6 +1007,9 @@ $jsonData = json_encode([
                                 <td class="p-3">
                                     <div class="font-bold text-slate-800 dark:text-zinc-100 flex items-center gap-2">
                                         <span x-text="p.title"></span>
+                                        <span x-show="p.isExternal" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-400" :title="t('externalLink')">
+                                            <i class="fas fa-external-link-alt text-[8px]"></i> <span x-text="t('external')"></span>
+                                        </span>
                                     </div>
                                     <div class="text-xs text-slate-500 dark:text-zinc-500 font-mono" x-text="p.folder"></div>
                                 </td>
@@ -732,8 +1028,8 @@ $jsonData = json_encode([
                                         <button x-show="isAdmin" @click="openEditor(p)" class="w-8 h-8 inline-flex items-center justify-center rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 hover:bg-brand-100 dark:hover:bg-brand-500/20 hover:text-brand-600 dark:hover:text-brand-400 transition-all opacity-0 group-hover:opacity-100">
                                             <i class="fas fa-pen text-xs"></i>
                                         </button>
-                                        <a :href="p.url" target="_blank" class="w-8 h-8 inline-flex items-center justify-center rounded-full bg-brand-50 dark:bg-brand-500/20 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white transition-all">
-                                            <i class="fas fa-arrow-right text-xs"></i>
+                                        <a :href="p.url" :target="p.isExternal ? '_blank' : '_self'" :rel="p.isExternal ? 'noopener noreferrer' : ''" class="w-8 h-8 inline-flex items-center justify-center rounded-full bg-brand-50 dark:bg-brand-500/20 text-brand-600 dark:text-brand-400 hover:bg-brand-500 hover:text-white transition-all">
+                                            <i class="fas text-xs" :class="p.isExternal ? 'fa-external-link-alt' : 'fa-arrow-right'"></i>
                                         </a>
                                     </div>
                                 </td>
@@ -869,10 +1165,22 @@ $jsonData = json_encode([
                             </div>
                         </div>
                         
-                        <div>
+                        <!-- External Link Toggle -->
+                        <div class="flex items-center gap-3 p-3 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/20">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" x-model="editForm.isExternal" class="sr-only peer">
+                                <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-500/20 rounded-full peer dark:bg-zinc-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
+                            </label>
+                            <span class="text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                                <i class="fas fa-external-link-alt mr-1"></i> <span x-text="t('isExternalProject')"></span>
+                            </span>
+                        </div>
+
+                        <!-- URL-Feld (nur sichtbar wenn External aktiv) -->
+                        <div x-show="editForm.isExternal" x-transition>
                             <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('urlLabel')"></label>
-                            <input type="text" x-model="editForm.url" :placeholder="t('urlPlaceholder')"
-                                   class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent">
+                            <input type="url" x-model="editForm.url" :placeholder="t('urlPlaceholder')"
+                                   class="w-full px-4 py-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-indigo-50 dark:bg-indigo-500/10 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
                         </div>
                         
                         <!-- Options: Pinned and Hidden -->
@@ -906,6 +1214,144 @@ $jsonData = json_encode([
                         </button>
                         <button type="submit" class="flex-1 px-4 py-2 rounded-xl bg-brand-500 text-white hover:bg-brand-600 transition-colors">
                             <i class="fas fa-save mr-2"></i> <span x-text="t('save')"></span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <!-- Create Project Modal -->
+        <div x-show="showCreateModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop bg-black/60" @click.self="showCreateModal = false">
+            <div class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto dark:border dark:border-zinc-800" @click.stop>
+                <div class="flex items-center justify-between mb-2">
+                    <h3 class="text-lg font-bold text-slate-800 dark:text-zinc-100">
+                        <i class="fas fa-plus-circle mr-2 text-brand-500"></i> <span x-text="t('createProject')"></span>
+                    </h3>
+                    <button @click="showCreateModal = false" class="w-8 h-8 rounded-full hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center justify-center text-slate-400 dark:text-zinc-500">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <p class="text-sm text-slate-500 dark:text-zinc-400 mb-6" x-text="t('createProjectDesc')"></p>
+
+                <form @submit.prevent="createProject()">
+                    <div class="space-y-4">
+                        <!-- Folder Name -->
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('folderName')"></label>
+                            <input type="text" x-model="createForm.folder" :placeholder="t('folderNamePlaceholder')" autocomplete="off"
+                                   @input="createForm.folder = createForm.folder.replace(/[^a-zA-Z0-9_\-]/g, '')"
+                                   class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent font-mono">
+                            <p class="text-xs text-slate-400 dark:text-zinc-500 mt-1" x-text="t('folderNameHint')"></p>
+                        </div>
+
+                        <!-- External Link Toggle -->
+                        <div class="flex items-center gap-3 p-3 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/20">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" x-model="createForm.isExternal" class="sr-only peer">
+                                <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-500/20 rounded-full peer dark:bg-zinc-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
+                            </label>
+                            <span class="text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                                <i class="fas fa-external-link-alt mr-1"></i> <span x-text="t('isExternalProject')"></span>
+                            </span>
+                        </div>
+
+                        <!-- URL (wird prominent wenn external) -->
+                        <div x-show="createForm.isExternal" x-transition>
+                            <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('urlLabel')"></label>
+                            <input type="url" x-model="createForm.url" :placeholder="t('urlPlaceholder')"
+                                   class="w-full px-4 py-2 rounded-xl border border-indigo-300 dark:border-indigo-500/40 bg-indigo-50 dark:bg-indigo-500/10 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                        </div>
+
+                        <hr class="border-slate-200 dark:border-zinc-800">
+
+                        <!-- Title -->
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('title')"></label>
+                            <input type="text" x-model="createForm.title" :placeholder="createForm.folder || t('title')" autocomplete="off"
+                                   class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent">
+                        </div>
+
+                        <!-- Description -->
+                        <div>
+                            <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('description')"></label>
+                            <textarea x-model="createForm.description" rows="2" :placeholder="t('descriptionPlaceholder')"
+                                      class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"></textarea>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('author')"></label>
+                                <input type="text" x-model="createForm.author" :placeholder="t('authorPlaceholder')"
+                                       class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('category')"></label>
+                                <input type="text" x-model="createForm.category" :placeholder="t('categoryPlaceholder')" list="create-categories-list"
+                                       class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent">
+                                <datalist id="create-categories-list">
+                                    <template x-for="cat in categories" :key="cat">
+                                        <option :value="cat"></option>
+                                    </template>
+                                </datalist>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('status')"></label>
+                                <select x-model="createForm.status"
+                                        class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent">
+                                    <option value="" x-text="t('statusAuto')"></option>
+                                    <option value="active" x-text="t('statusActive')"></option>
+                                    <option value="stable" x-text="t('statusStable')"></option>
+                                    <option value="idle" x-text="t('statusIdle')"></option>
+                                    <option value="archive" x-text="t('statusArchive')"></option>
+                                    <option value="completed" x-text="t('statusCompleted')"></option>
+                                    <option value="in development" x-text="t('statusInDev')"></option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-zinc-300 mb-1" x-text="t('tagsLabel')"></label>
+                                <input type="text" x-model="createForm.tags" :placeholder="t('tagsPlaceholder')"
+                                       class="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-slate-800 dark:text-zinc-100 focus:ring-2 focus:ring-brand-500 focus:border-transparent">
+                            </div>
+                        </div>
+
+                        <!-- Options -->
+                        <div class="flex flex-col gap-3 pt-2">
+                            <div class="flex items-center gap-3">
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" x-model="createForm.pinned" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-500/20 rounded-full peer dark:bg-zinc-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-400"></div>
+                                </label>
+                                <span class="text-sm font-medium text-slate-600 dark:text-zinc-300">
+                                    <i class="fas fa-thumbtack mr-1 text-amber-500"></i> <span x-text="t('pinProject')"></span>
+                                </span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" x-model="createForm.hidden" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-500/20 rounded-full peer dark:bg-zinc-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-500"></div>
+                                </label>
+                                <span class="text-sm font-medium text-slate-600 dark:text-zinc-300">
+                                    <i class="fas fa-eye-slash mr-1 text-zinc-500"></i> <span x-text="t('hideProject')"></span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p x-show="createError" class="text-red-500 text-sm mt-4" x-text="createError"></p>
+                    <p x-show="createSuccess" class="text-green-500 text-sm mt-4" x-text="t('createSuccess')"></p>
+
+                    <div class="flex gap-3 mt-6">
+                        <button type="button" @click="showCreateModal = false" class="flex-1 px-4 py-2 rounded-xl border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors" x-text="t('cancel')">
+                        </button>
+                        <button type="submit" :disabled="isCreating || !createForm.folder" class="flex-1 px-4 py-2 rounded-xl bg-brand-500 text-white hover:bg-brand-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                            <template x-if="!isCreating">
+                                <span><i class="fas fa-plus mr-2"></i> <span x-text="t('createBtn')"></span></span>
+                            </template>
+                            <template x-if="isCreating">
+                                <span><i class="fas fa-spinner fa-spin mr-2"></i> <span x-text="t('creating')"></span></span>
+                            </template>
                         </button>
                     </div>
                 </form>
@@ -949,6 +1395,7 @@ $jsonData = json_encode([
                 // Modals
                 showLoginModal: false,
                 showEditorModal: false,
+                showCreateModal: false,
                 loginPassword: '',
                 loginError: '',
                 
@@ -963,10 +1410,29 @@ $jsonData = json_encode([
                     tags: '',
                     url: '',
                     pinned: false,
-                    hidden: false
+                    hidden: false,
+                    isExternal: false
                 },
                 saveError: '',
                 saveSuccess: false,
+                
+                // Create Project
+                createForm: {
+                    folder: '',
+                    title: '',
+                    description: '',
+                    author: '',
+                    category: '',
+                    status: '',
+                    tags: '',
+                    url: '',
+                    pinned: false,
+                    hidden: false,
+                    isExternal: false
+                },
+                createError: '',
+                createSuccess: false,
+                isCreating: false,
                 
                 // Thumbnail Upload
                 isDragging: false,
@@ -984,6 +1450,7 @@ $jsonData = json_encode([
                         if (e.key === 'Escape') {
                             this.showLoginModal = false;
                             this.showEditorModal = false;
+                            this.showCreateModal = false;
                             this.sidebarOpen = false;
                         }
                     });
@@ -1120,6 +1587,8 @@ $jsonData = json_encode([
                 // Editor
                 openEditor(project) {
                     this.editProject = project;
+                    const hasCustomUrl = project.url !== project.folder + '/';
+                    const isExt = project.isExternal || (hasCustomUrl && /^https?:\/\//i.test(project.url));
                     this.editForm = {
                         title: project.title === project.folder ? '' : project.title,
                         description: project.desc || '',
@@ -1127,9 +1596,10 @@ $jsonData = json_encode([
                         category: project.category || '',
                         status: project.statusManual ? project.status : '',
                         tags: project.tags.join(', '),
-                        url: project.url.endsWith('/') && project.url === project.folder + '/' ? '' : project.url,
+                        url: isExt ? project.url : '',
                         pinned: project.pinned || false,
-                        hidden: project.hidden || false
+                        hidden: project.hidden || false,
+                        isExternal: isExt
                     };
                     this.saveError = '';
                     this.saveSuccess = false;
@@ -1222,7 +1692,7 @@ $jsonData = json_encode([
                     formData.append('category', this.editForm.category);
                     formData.append('status', this.editForm.status);
                     formData.append('tags', this.editForm.tags);
-                    formData.append('url', this.editForm.url);
+                    formData.append('url', this.editForm.isExternal ? this.editForm.url : '');
                     formData.append('pinned', this.editForm.pinned ? 'true' : '');
                     formData.append('hidden', this.editForm.hidden ? 'true' : '');
                     
@@ -1241,7 +1711,9 @@ $jsonData = json_encode([
                                 this.projects[idx].status = this.editForm.status || this.editProject.status;
                                 this.projects[idx].statusManual = !!this.editForm.status;
                                 this.projects[idx].tags = this.editForm.tags ? this.editForm.tags.split(',').map(t => t.trim()) : [];
-                                this.projects[idx].url = this.editForm.url || this.editProject.folder + '/';
+                                const savedUrl = this.editForm.isExternal ? this.editForm.url : '';
+                                this.projects[idx].url = savedUrl || this.editProject.folder + '/';
+                                this.projects[idx].isExternal = this.editForm.isExternal && !!this.editForm.url;
                                 this.projects[idx].pinned = this.editForm.pinned;
                                 this.projects[idx].hidden = this.editForm.hidden;
                             }
@@ -1254,6 +1726,124 @@ $jsonData = json_encode([
                     } catch (e) {
                         this.saveError = this.t('connectionError');
                     }
+                },
+
+                // Create Project
+                openCreateModal() {
+                    this.createForm = {
+                        folder: '',
+                        title: '',
+                        description: '',
+                        author: '',
+                        category: '',
+                        status: '',
+                        tags: '',
+                        url: '',
+                        pinned: false,
+                        hidden: false,
+                        isExternal: false
+                    };
+                    this.createError = '';
+                    this.createSuccess = false;
+                    this.isCreating = false;
+                    this.showCreateModal = true;
+                },
+
+                async createProject() {
+                    if (!this.createForm.folder) {
+                        this.createError = this.t('folderEmpty');
+                        return;
+                    }
+                    
+                    this.createError = '';
+                    this.createSuccess = false;
+                    this.isCreating = true;
+                    
+                    const formData = new FormData();
+                    formData.append('action', 'create_project');
+                    formData.append('folder', this.createForm.folder);
+                    formData.append('title', this.createForm.title);
+                    formData.append('description', this.createForm.description);
+                    formData.append('author', this.createForm.author);
+                    formData.append('category', this.createForm.category);
+                    formData.append('status', this.createForm.status);
+                    formData.append('tags', this.createForm.tags);
+                    formData.append('pinned', this.createForm.pinned ? 'true' : '');
+                    formData.append('hidden', this.createForm.hidden ? 'true' : '');
+                    
+                    // URL: bei externem Projekt die URL setzen, sonst optional
+                    const url = this.createForm.isExternal ? this.createForm.url : (this.createForm.url || '');
+                    formData.append('url', url);
+                    
+                    try {
+                        const res = await fetch('', { method: 'POST', body: formData });
+                        const data = await res.json();
+                        if (data.success) {
+                            this.createSuccess = true;
+                            
+                            // Neues Projekt zum lokalen Array hinzufügen
+                            const now = Math.floor(Date.now() / 1000);
+                            const today = new Date().toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                            const projectUrl = url || this.createForm.folder + '/';
+                            const isExternal = !!url && /^https?:\/\//i.test(url);
+                            
+                            const newProject = {
+                                id: this.md5(this.createForm.folder),
+                                folder: this.createForm.folder,
+                                title: this.createForm.title || this.createForm.folder,
+                                desc: this.createForm.description,
+                                author: this.createForm.author || 'System',
+                                category: this.createForm.category || null,
+                                status: this.createForm.status || 'active',
+                                statusManual: !!this.createForm.status,
+                                tags: this.createForm.tags ? this.createForm.tags.split(',').map(t => t.trim()).filter(t => t) : [],
+                                url: projectUrl,
+                                isExternal: isExternal,
+                                thumb: null,
+                                pinned: this.createForm.pinned,
+                                hidden: this.createForm.hidden,
+                                modified: now,
+                                created: now,
+                                modified_fmt: today,
+                                created_fmt: today,
+                                days_inactive: 0
+                            };
+                            
+                            this.projects.push(newProject);
+                            
+                            // Kategorie und Tags aktualisieren
+                            if (newProject.category && !this.categories.includes(newProject.category)) {
+                                this.categories.push(newProject.category);
+                                this.categories.sort();
+                            }
+                            newProject.tags.forEach(tag => {
+                                if (tag && !this.tags.includes(tag)) {
+                                    this.tags.push(tag);
+                                    this.tags.sort();
+                                }
+                            });
+                            
+                            setTimeout(() => {
+                                this.showCreateModal = false;
+                            }, 1000);
+                        } else {
+                            this.createError = data.error || this.t('createFailed');
+                        }
+                    } catch (e) {
+                        this.createError = this.t('connectionError');
+                    }
+                    this.isCreating = false;
+                },
+
+                // Simple hash function for client-side ID generation
+                md5(str) {
+                    let hash = 0;
+                    for (let i = 0; i < str.length; i++) {
+                        const char = str.charCodeAt(i);
+                        hash = ((hash << 5) - hash) + char;
+                        hash = hash & hash;
+                    }
+                    return 'c' + Math.abs(hash).toString(16).padStart(8, '0');
                 },
 
             }
