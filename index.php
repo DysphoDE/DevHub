@@ -33,7 +33,7 @@ require_once $config_file;
 // ============================================
 // FALLBACKS FOR CONFIG VARIABLES
 // ============================================
-if (!isset($ignore) || !is_array($ignore)) $ignore = ['.', '..', '.git', 'node_modules', 'vendor'];
+if (!isset($ignore) || !is_array($ignore)) $ignore = ['.', '..', '.git', 'node_modules', 'vendor', '$RECYCLE.BIN', 'System Volume Information', '$WinREAgent'];
 if (!isset($valid_img) || !is_array($valid_img)) $valid_img = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'];
 if (!defined('SITE_TITLE')) define('SITE_TITLE', 'DevHub');
 if (!defined('SITE_SUBTITLE')) define('SITE_SUBTITLE', 'Local Development');
@@ -210,7 +210,7 @@ $data = [];
 $folders = array_diff(scandir($current_dir), $ignore);
 
 foreach ($folders as $folder) {
-    if (!is_dir($current_dir . '/' . $folder) || str_starts_with($folder, '_')) continue;
+    if (!is_dir($current_dir . '/' . $folder) || str_starts_with($folder, '_') || str_starts_with($folder, '$')) continue;
 
     $folder_path = $current_dir . '/' . $folder;
     $ini_path = $folder_path . '/project.ini';

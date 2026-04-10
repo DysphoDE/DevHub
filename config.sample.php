@@ -40,7 +40,7 @@ define('META_DESCRIPTION', 'Central overview of all local development projects')
 // ============================================
 
 // Folders and files to ignore
-$ignore = ['.', '..', '.git', 'node_modules', 'vendor'];
+$ignore = ['.', '..', '.git', 'node_modules', 'vendor', '$RECYCLE.BIN', 'System Volume Information', '$WinREAgent'];
 
 // Valid image formats for thumbnails
 $valid_img = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'];
