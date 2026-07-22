@@ -1,0 +1,12 @@
+{
+  "host": "127.0.0.1",
+  "publicHost": "devhub",
+  "autostartMode": "dev",
+  "port": 7331,
+  "scanRoot": "..",
+  "maxDepth": 5,
+  "maxEntriesPerProject": 15000,
+  "laragonRoot": "C:\\laragon",
+  "editor": "auto",
+  "ignore": []
+}

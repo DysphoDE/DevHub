@@ -1,173 +1,178 @@
 # DevHub
 
-DevHub is a lightweight single-file dashboard for your local development environment. It automatically scans your root directory and transforms a list of folders into a modern, searchable project overview with metadata and status tracking.
+DevHub is a local dashboard for finding, opening, running, and maintaining the projects on your development machine. Point it at the folder that contains your repositories and it builds a visual workbench from the files that are already there—no per-project registration required.
 
-![PHP](https://img.shields.io/badge/PHP-8.0+-777BB4?style=flat-square&logo=php&logoColor=white)
-![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-3.x-38B2AC?style=flat-square&logo=tailwind-css&logoColor=white)
-![Alpine.js](https://img.shields.io/badge/Alpine.js-3.x-8BC0D0?style=flat-square&logo=alpine.js&logoColor=white)
+The server binds to your loopback interface by default. Project paths, Git state, process output, and configuration stay on your computer.
 
-## ✨ Features
+## What it does
 
-- **Automatic Project Detection** - Scans all subfolders and displays them as project cards
-- **Metadata via `project.ini`** - Title, description, author, category, tags, and more
-- **Smart Status Detection** - Automatic classification based on last modification
-- **Admin Area** - Protected area for editing project metadata
-- **Thumbnail Upload** - Upload images via drag & drop
-- **Dark Mode** - Automatic detection + manual toggle
-- **Filter & Search** - By category, tags, and free text
-- **Sorting** - By date, name, category, or status
-- **Responsive Design** - Optimized for all devices and resolutions
-- **Pinned Projects** - Pin important projects to the top
-- **Hidden Projects** - Make projects visible only to admins
-- **Multi-Language** - Automatic language detection (English/German) based on browser settings
+- Discovers every direct child of a workspace folder as a project.
+- Detects common stacks such as Node.js, React, Vue, Next.js, PHP, Laravel, Symfony, Python, Docker, and static HTML.
+- Creates launch actions from `package.json` scripts, `start.bat`, `start.cmd`, `start.ps1`, static sites, and PHP entry points.
+- Starts and stops development processes, assigns free preview ports, and streams their output.
+- Shows Git branch, sync state, changed files, diffs, staging controls, commits, and pushes in one workbench.
+- Opens projects in the file manager, terminal, or a detected editor.
+- Supports favorites, recent projects, a single global project search (`Ctrl+K`), technology filters, and grid/list views.
+- Integrates with Laragon on Windows, including local virtual hosts and service controls.
+- Can start silently when you sign in to Windows.
 
-## 📦 Installation
+## Requirements
 
-### Requirements
+- [Node.js](https://nodejs.org/) 20 or newer
+- npm
+- Git for repository status and Git actions
+- Windows for Laragon integration and the included scheduled-task installer
 
-- PHP 8.0 or higher
-- Web server (Apache, Nginx, XAMPP, etc.)
+The core dashboard also runs on macOS and Linux. Some operating-system actions are currently Windows-specific.
 
-### Setup
+## Quick start
 
-1. **Download Repository**
-   ```bash
-   # Option 1: Git clone (if Git is installed)
-   git clone https://github.com/YourUsername/DevHub.git
-
-   # Option 2: Download and extract ZIP from GitHub
-   ```
-
-2. **Move to Web Directory**
-
-   **For XAMPP (Windows):**
-   - Copy the `DevHub` folder to `C:\xampp\htdocs\dev\`
-   - Or use Windows Explorer to move it
-
-   **For other web servers:**
-   ```bash
-   # Linux/Mac example
-   mv DevHub /var/www/html/dev/
-   ```
-
-3. **Create Configuration**
-
-   **Windows:**
-   - Copy `config.sample.php` to `config.php`
-   - Or use the command prompt:
-   ```cmd
-   copy config.sample.php config.php
-   ```
-
-   **Linux/Mac:**
-   ```bash
-   cp config.sample.php config.php
-   ```
-
-4. **Customize Configuration**
-
-   Open `config.php` in a text editor and change at least the admin password:
-   ```php
-   define('ADMIN_PASSWORD', 'YourSecurePassword!');
-   ```
-
-5. **Open in Browser**
-   ```
-   http://localhost/dev/DevHub/
-   ```
-
-## ⚙️ Configuration
-
-All settings are located in `config.php`:
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `ADMIN_PASSWORD` | Password for the admin area | - |
-| `SITE_TITLE` | Title in the sidebar | DevHub |
-| `SITE_SUBTITLE` | Subtitle | Local Development |
-| `META_TITLE` | Browser tab title | DevHub - Overview |
-| `META_DESCRIPTION` | Meta description | - |
-| `$ignore` | Ignored folders | `.git`, `node_modules`, `vendor` |
-| `$valid_img` | Valid thumbnail formats | jpg, png, webp, gif, svg |
-| `STATUS_STABLE_DAYS` | Days until status "stable" | 7 |
-| `STATUS_IDLE_DAYS` | Days until status "idle" | 30 |
-| `STATUS_ARCHIVE_DAYS` | Days until status "archive" | 90 |
-
-## 📁 Project Metadata
-
-Each project can have a `project.ini` file in its root directory:
-
-```ini
-title = "My Project"
-description = "A short description of the project"
-author = "John Doe"
-category = "Web App"
-status = "active"
-tags = "php, mysql, api"
-url = "https://example.com"
-pinned = "true"
-hidden = "false"
+```bash
+git clone https://github.com/DysphoDE/DevHub.git
+cd DevHub
+npm install
+npm run dev
 ```
 
-### Available Fields
+Open [http://localhost:7331](http://localhost:7331).
 
-| Field | Description |
-|-------|-------------|
-| `title` | Display name (default: folder name) |
-| `description` | Short description |
-| `author` | Author/Developer |
-| `category` | Category for filtering |
-| `status` | Manual status (overrides auto-detection) |
-| `tags` | Comma-separated tags |
-| `url` | External URL (instead of folder content) |
-| `pinned` | `true` = Project is displayed at the top |
-| `hidden` | `true` = Only visible to admins |
+DevHub initially uses the parent folder of the repository as its workspace. Click the workspace path in the top-left corner to choose a different folder. On Windows and macOS you can use the native folder picker; on every platform you can enter an absolute path.
 
-### Status Values
+The selection is saved in a local `devhub.config.json` file. That file is ignored by Git, so machine-specific paths are never committed.
 
-- **active** - Currently being worked on (< 7 days inactive)
-- **stable** - Working, few changes (7-30 days)
-- **idle** - Not worked on for a while (30-90 days)
-- **archive** - Very old, possibly outdated (> 90 days)
-- **completed** - Finished
-- **in development** - In active development
+## Workspace layout
 
-## 🖼️ Thumbnails
+DevHub treats each direct child of the selected folder as one project:
 
-Place an image named `thumbnail.jpg` (or .png, .webp, .gif, .svg) in the project folder to display a preview.
+```text
+Projects/
+├── customer-portal/     ← project
+├── docs-site/           ← project
+├── internal-api/        ← project
+└── DevHub/              ← listed for Git and project actions
+```
 
-Alternatively, as a logged-in admin, you can upload thumbnails directly through the edit function.
+Project metadata and launchers may be discovered recursively within each project. Large dependency and build directories are skipped automatically.
 
-## 🔐 Admin Area
+When DevHub itself is inside the selected workspace, it remains visible so you can open it and use the Git workbench. Its own launch actions are hidden to prevent starting a second DevHub server on the same port.
 
-1. Click the lock icon in the top right corner
-2. Enter the password defined in `config.php`
-3. As admin you can:
-   - Edit project metadata
-   - Add new projects
-   - Upload/remove thumbnails
-   - See hidden projects
+## Production mode
 
-## 🌐 Language Support
+Build and run the compiled server:
 
-DevHub automatically detects your browser language and displays the interface in:
-- **German** - For browsers with German language settings
-- **Spanish** - For browsers with Spanish language settings
-- **French** - For browsers with French language settings
-- **English** - For all other languages
+```bash
+npm run build
+npm start
+```
 
-## 🎨 Customization
+The default address is [http://localhost:7331](http://localhost:7331). DevHub only accepts local connections unless remote access is explicitly enabled.
 
-### Hide Folders
+## Configuration
 
-Folders starting with `_` (underscore) are automatically ignored.
+Most users only need the workspace control in the UI. For additional settings, copy the example configuration:
 
-Additionally, you can add more folders to the `$ignore` list in `config.php`.
+```powershell
+Copy-Item devhub.config.example.json devhub.config.json
+```
 
-### Theme
+On macOS or Linux:
 
-The dashboard supports Light and Dark mode. The mode is saved in the browser.
+```bash
+cp devhub.config.example.json devhub.config.json
+```
 
-## 📝 License
+Important options:
 
-MIT License - Free to use for personal and commercial projects.
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `host` | `127.0.0.1` | Address the local server binds to |
+| `publicHost` | `devhub` | Hostname used by the Windows installer |
+| `port` | `7331` | DevHub HTTP port |
+| `scanRoot` | `..` | Workspace containing the project folders |
+| `maxDepth` | `5` | Maximum metadata scan depth per project |
+| `maxEntriesPerProject` | `15000` | Safety limit for scanned entries |
+| `laragonRoot` | `C:\laragon` | Laragon installation directory |
+| `editor` | `auto` | Editor executable or automatic detection |
+| `autostartMode` | `dev` | `dev` for the watcher or `production` for the compiled server |
+| `ignore` | `[]` | Additional directory names to ignore |
+
+Environment variables override file configuration:
+
+- `DEVHUB_ROOT`
+- `DEVHUB_PORT`
+- `DEVHUB_HOST`
+- `DEVHUB_PUBLIC_HOST`
+- `DEVHUB_AUTOSTART_MODE`
+
+When `DEVHUB_ROOT` is set, the workspace is intentionally locked and cannot be changed from the UI. Binding to a non-loopback address additionally requires `DEVHUB_ALLOW_REMOTE=1`.
+
+## Windows autostart
+
+Run the installer from an elevated PowerShell prompt, or accept the UAC prompt it opens:
+
+```powershell
+npm run windows:install
+```
+
+The installer:
+
+- builds the application;
+- adds the configured `publicHost` to the Windows hosts file;
+- creates the `DevHub Node` scheduled task for the current user;
+- starts DevHub without a visible terminal window; and
+- writes autostart output to `.devhub\autostart.log`.
+
+After installation, the default configuration is available at [http://devhub:7331](http://devhub:7331).
+
+Remove the task and managed hosts entry with:
+
+```powershell
+npm run windows:uninstall
+```
+
+## Project discovery
+
+DevHub uses existing project files instead of a central registry. Among other signals, it reads:
+
+- `package.json` scripts and dependencies;
+- `composer.json` packages;
+- Git metadata;
+- README headings and descriptions;
+- HTML and PHP entry points;
+- `start.bat`, `start.cmd`, and `start.ps1`; and
+- optional `thumbnail.jpg`, `thumbnail.png`, `thumbnail.webp`, or `thumbnail.gif` files.
+
+Only scripts and files inside the selected workspace are considered. Launch actions still execute local code with your user permissions, so only start projects you trust.
+
+## Development
+
+```bash
+npm run check    # TypeScript type-check
+npm test         # Node test suite
+npm run build    # Compile to dist/
+npm run verify   # Run all checks above
+```
+
+Repository structure:
+
+```text
+public/      Browser UI (HTML, CSS, JavaScript)
+runtime/     Static preview server
+scripts/     Windows autostart helpers
+src/         TypeScript server, scanner, Git, and process management
+tests/       Scanner, configuration, Git, and process tests
+```
+
+## Security model
+
+- The server binds to a loopback address and rejects non-local clients by default.
+- State-changing API requests require a session-specific token.
+- The UI is served with a restrictive Content Security Policy.
+- Absolute project paths are not included in public project API objects.
+- Local configuration, logs, build output, and dependencies are excluded from Git.
+
+If you intentionally expose DevHub beyond your own machine, review the security implications first. It can launch processes, access repositories, and perform Git operations with the permissions of the DevHub process.
+
+## Contributing
+
+Issues and pull requests are welcome. Please run `npm run verify` before submitting a change.

@@ -1,5 +1,10 @@
-# Konfiguration mit sensiblen Daten
-config.php
+node_modules/
+dist/
+.devhub/
+devhub.config.json
+test-results/
+__pycache__/
+*.pyc
 
 # IDE / Editor
 .idea/
@@ -14,5 +19,3 @@ Thumbs.db
 
 # Logs
 *.log
-project.ini
-thumbnail.jpg

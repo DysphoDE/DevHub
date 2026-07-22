@@ -1,0 +1,7 @@
+{
+  "name": "devhub/sample-php",
+  "description": "Eine kleine PHP-Testanwendung für DevHub.",
+  "require": {
+    "php": ">=8.2"
+  }
+}

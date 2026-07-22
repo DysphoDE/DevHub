@@ -1,0 +1,23 @@
+{
+  "name": "devhub-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local project launcher and development dashboard",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "prewindows:install": "npm run build",
+    "windows:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows-autostart.ps1",
+    "windows:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-windows-autostart.ps1",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "verify": "npm run check && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
