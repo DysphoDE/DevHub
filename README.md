@@ -12,7 +12,8 @@ The server binds to your loopback interface by default. Project paths, Git state
 - Starts and stops development processes, assigns free preview ports, and streams their output.
 - Shows Git branch, sync state, changed files, diffs, staging controls, commits, and pushes in one workbench.
 - Opens projects in the file manager, terminal, or a detected editor.
-- Supports favorites, recent projects, a single global project search (`Ctrl+K`), technology filters, and grid/list views.
+- Supports favorites, recent projects, a context-aware global search (`Ctrl+K`), technology filters, and grid/list views.
+- Includes a workspace-wide Git control center for browsing every repository, exploring the complete commit history and per-commit diffs, selecting and staging files in batches, safely discarding local changes, committing, and syncing without leaving DevHub.
 - Integrates with Laragon on Windows, including local virtual hosts and service controls.
 - Can start silently when you sign in to Windows.
 

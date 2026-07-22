@@ -6,9 +6,13 @@ const state = {
   projects: [],
   laragon: null,
   capabilities: null,
+  page: location.hash === "#git" ? "git" : "projects",
   filter: "all",
   technology: null,
   query: "",
+  gitQuery: "",
+  gitFilter: localStorage.getItem("devhub_git_filter") || "all",
+  activeGitProjectId: localStorage.getItem("devhub_git_project") || null,
   sort: localStorage.getItem("devhub_sort") || "smart",
   view: localStorage.getItem("devhub_view") || "grid",
   favorites: new Set(Array.isArray(storedFavorites) ? storedFavorites : []),
@@ -18,13 +22,22 @@ const state = {
   runtimeExpanded: localStorage.getItem("devhub_runtime_expanded") === "true",
   gitCommitMessages: new Map(),
   pendingGitAction: null,
+  gitMode: localStorage.getItem("devhub_git_mode") === "history" ? "history" : "changes",
   activeGitFiles: new Map(),
+  selectedGitFiles: new Map(),
   gitDiffs: new Map(),
   gitDiffLoading: null,
+  gitHistories: new Map(),
+  gitHistoryLoading: new Set(),
+  activeGitCommits: new Map(),
+  gitCommitDetails: new Map(),
+  gitCommitLoading: null,
+  pendingGitDiscard: null,
   activeLogId: null
 };
 
 const elements = {
+  projectsPage: document.querySelector("#projects-page"), gitPage: document.querySelector("#git-page"),
   grid: document.querySelector("#project-grid"), empty: document.querySelector("#empty-state"),
   emptyTitle: document.querySelector("#empty-title"), emptyMessage: document.querySelector("#empty-message"), emptyAction: document.querySelector("#empty-action"),
   rootLabel: document.querySelector("#drive-label"), rootPath: document.querySelector("#workspace-path"), workspaceSettings: document.querySelector("#workspace-settings"),
@@ -33,7 +46,7 @@ const elements = {
   resultCount: document.querySelector("#result-count"), projectCount: document.querySelector("#project-count"),
   runningCount: document.querySelector("#running-count"), launcherCount: document.querySelector("#launcher-count"), allCount: document.querySelector("#all-count"),
   favoriteCount: document.querySelector("#favorite-count"), recentCount: document.querySelector("#recent-count"), runningFilterCount: document.querySelector("#running-filter-count"),
-  attentionCount: document.querySelector("#attention-count"),
+  attentionCount: document.querySelector("#attention-count"), gitRepositoryCount: document.querySelector("#git-repository-count"),
   scanStatus: document.querySelector("#scan-status"), search: document.querySelector("#search"), sort: document.querySelector("#sort"), rescan: document.querySelector("#rescan"),
   techFilters: document.querySelector("#tech-filters"), mobileTech: document.querySelector("#mobile-tech"), clearTech: document.querySelector("#clear-tech"), activeFilter: document.querySelector("#active-filter"),
   laragonState: document.querySelector("#laragon-state"), webState: document.querySelector("#web-state"), databaseState: document.querySelector("#database-state"),
@@ -41,6 +54,8 @@ const elements = {
   laragonOpen: document.querySelector("#laragon-open"), laragonOpenLabel: document.querySelector("#laragon-open-label"), laragonReload: document.querySelector("#laragon-reload"),
   serviceDock: document.querySelector("#service-dock"), runtimeDetails: document.querySelector("#runtime-details"), runtimeTopology: document.querySelector("#runtime-topology"),
   projectDialog: document.querySelector("#project-dialog"), projectDialogContent: document.querySelector("#project-dialog-content"),
+  discardDialog: document.querySelector("#git-discard-dialog"), discardCount: document.querySelector("#git-discard-count"), discardFiles: document.querySelector("#git-discard-files"),
+  discardCancel: document.querySelector("#git-discard-cancel"), discardConfirm: document.querySelector("#git-discard-confirm"),
   logDialog: document.querySelector("#log-dialog"), logTitle: document.querySelector("#log-title"), logCommand: document.querySelector("#log-command"),
   logOutput: document.querySelector("#log-output"), logState: document.querySelector("#log-state"), restartLog: document.querySelector("#restart-log"),
   toastRegion: document.querySelector("#toast-region")
@@ -198,23 +213,24 @@ function launcherRow(launcher) {
     <div class="launcher-copy"><span class="launcher-name">${escapeHtml(launcher.name)}</span><code class="launcher-command" title="${escapeHtml(launcher.command)}">${escapeHtml(launcher.command)}</code></div>
     <span class="launcher-status ${runtime.status}">${statusLabels[runtime.status] || runtime.status}</span>
     <div class="launcher-tools">
-      ${runtime.url && runtime.status === "running" ? `<a class="mini-action" href="${escapeHtml(runtime.url)}" data-open-id="${launcher.projectId}" target="_blank" rel="noopener noreferrer" aria-label="Im Browser öffnen"><span aria-hidden="true">↗</span><span class="mini-label">Browser</span></a>` : ""}
-      <button class="mini-action" data-log="${launcher.id}" data-focus-key="log-${launcher.id}" aria-label="Logs anzeigen"><span aria-hidden="true">&gt;_</span><span class="mini-label">Logs</span></button>
-      <button class="mini-action ${action === "stop" ? "stop" : ""} ${busy ? "busy" : ""}" data-launcher-action="${action}" data-id="${launcher.id}" data-focus-key="run-${launcher.id}" ${busy ? "disabled" : ""} aria-label="${action === "stop" ? "Stoppen" : "Starten"}"><span aria-hidden="true">${busy ? "…" : action === "stop" ? "■" : "▶"}</span><span class="mini-label">${action === "stop" ? "Stoppen" : "Starten"}</span></button>
+      ${runtime.url && runtime.status === "running" ? `<a class="mini-action" href="${escapeHtml(runtime.url)}" data-open-id="${launcher.projectId}" target="_blank" rel="noopener noreferrer" aria-label="Im Browser öffnen"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i><span class="mini-label">Browser</span></a>` : ""}
+      <button class="mini-action" data-log="${launcher.id}" data-focus-key="log-${launcher.id}" aria-label="Logs anzeigen"><i class="fa-solid fa-terminal" aria-hidden="true"></i><span class="mini-label">Logs</span></button>
+      <button class="mini-action ${action === "stop" ? "stop" : ""} ${busy ? "busy" : ""}" data-launcher-action="${action}" data-id="${launcher.id}" data-focus-key="run-${launcher.id}" ${busy ? "disabled" : ""} aria-label="${action === "stop" ? "Stoppen" : "Starten"}"><i class="fa-solid ${busy ? "fa-spinner fa-spin" : action === "stop" ? "fa-stop" : "fa-play"}" aria-hidden="true"></i><span class="mini-label">${action === "stop" ? "Stoppen" : "Starten"}</span></button>
     </div>
   </div>`;
 }
 
-function primaryAction(project) {
+function primaryAction(project, compact = false) {
   const url = browserUrl(project);
-  if (url) return `<a class="primary-card-action running" href="${escapeHtml(url)}" data-open-id="${project.id}" target="_blank" rel="noopener noreferrer">Browser öffnen <span>↗</span></a>`;
+  if (url) return `<a class="primary-card-action running" href="${escapeHtml(url)}" data-open-id="${project.id}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>${compact ? "Browser" : "Browser öffnen"}</a>`;
   const launcher = preferredLauncher(project);
   if (launcher) {
     const running = launcher.runtime.status === "running";
     const busy = ["starting", "stopping"].includes(launcher.runtime.status);
-    return `<button class="primary-card-action ${running ? "running" : ""}" data-launcher-action="${running ? "stop" : "start"}" data-id="${launcher.id}" data-project-id="${project.id}" ${busy ? "disabled" : ""}>${busy ? "Wird ausgeführt …" : running ? "Stoppen" : `Starten · ${escapeHtml(launcher.name)}`}</button>`;
+    const label = busy ? (compact ? "Bitte warten …" : "Wird ausgeführt …") : running ? "Stoppen" : compact ? "Starten" : `Starten · ${escapeHtml(launcher.name)}`;
+    return `<button class="primary-card-action ${running ? "running" : ""}" data-launcher-action="${running ? "stop" : "start"}" data-id="${launcher.id}" data-project-id="${project.id}" ${busy ? "disabled" : ""}><i class="fa-solid ${busy ? "fa-spinner fa-spin" : running ? "fa-stop" : "fa-play"}" aria-hidden="true"></i>${label}</button>`;
   }
-  return `<button class="primary-card-action folder" data-project-action="folder" data-project-id="${project.id}">Ordner öffnen</button>`;
+  return `<button class="primary-card-action folder" data-project-action="folder" data-project-id="${project.id}"><i class="fa-regular fa-folder-open" aria-hidden="true"></i>${compact ? "Ordner" : "Ordner öffnen"}</button>`;
 }
 
 function gitConflictCount(git) {
@@ -222,8 +238,8 @@ function gitConflictCount(git) {
   return git.files?.filter((file) => conflictStates.has(`${file.indexStatus}${file.worktreeStatus}`)).length || 0;
 }
 
-function favoriteIcon() {
-  return '<svg class="favorite-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.6 2.55 5.17 5.7.83-4.13 4.02.98 5.68L12 16.62 6.9 19.3l.98-5.68L3.65 9.6l5.8-.83L12 3.6Z"/></svg>';
+function favoriteIcon(active) {
+  return `<i class="${active ? "fa-solid" : "fa-regular"} fa-star favorite-icon" aria-hidden="true"></i>`;
 }
 
 function gitStatusPresentation(git) {
@@ -238,7 +254,7 @@ function gitStatusPresentation(git) {
 function gitBranchMeta(git) {
   const status = gitStatusPresentation(git);
   return `<span class="meta-item git-meta ${status.kind}" title="${escapeHtml(status.title)}">
-    <svg class="git-branch-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="4" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="6" cy="20" r="2"/><path d="M6 6v12M18 9c0 4-3.5 5-12 5"/></svg>
+    <i class="fa-solid fa-code-branch git-branch-icon" aria-hidden="true"></i>
     <code>${escapeHtml(git.branch || "detached")}</code><span class="git-inline-status"><i></i>${escapeHtml(status.label)}</span>
   </span>`;
 }
@@ -258,7 +274,7 @@ function projectCard(project) {
       <div class="card-kicker">
         ${project.thumbnailUrl ? `<img class="card-thumb" src="${escapeHtml(project.thumbnailUrl)}" alt="">` : `<span class="stack-symbol">${escapeHtml(symbol)}</span>`}
         <span class="card-state ${status.kind}"><i></i>${escapeHtml(status.label)}</span>
-        <button class="favorite-button ${favorite ? "active" : ""}" data-favorite="${project.id}" data-focus-key="fav-${project.id}" aria-label="${favorite ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}" aria-pressed="${favorite}">${favoriteIcon()}</button>
+        <button class="favorite-button ${favorite ? "active" : ""}" data-favorite="${project.id}" data-focus-key="fav-${project.id}" aria-label="${favorite ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}" aria-pressed="${favorite}">${favoriteIcon(favorite)}</button>
       </div>
       <h2 title="${escapeHtml(project.name)}">${escapeHtml(project.name)}</h2>
       <code class="project-path" title="${escapeHtml(project.relativePath)}">${escapeHtml(project.relativePath)}</code>
@@ -272,10 +288,10 @@ function projectCard(project) {
     ${project.launchers.length ? `<div class="launcher-panel focused-launcher-panel"><div class="launcher-panel-label"><span>${expanded ? "Alle Starter" : "Bevorzugter Starter"}</span><b>${project.launchers.length}</b></div>${visibleLaunchers.map(launcherRow).join("")}${project.launchers.length > 1 ? `<button class="more-launchers" data-expand="${project.id}">${expanded ? "Auf bevorzugten Starter reduzieren" : `${project.launchers.length - 1} weitere Starter anzeigen`}</button>` : ""}</div>` : ""}
     <div class="card-actions">
       ${primaryAction(project)}
-      <button class="card-icon-action" data-project-action="editor" data-project-id="${project.id}" aria-label="In ${escapeHtml(editorName)} öffnen" ${state.capabilities?.editor.available ? "" : "disabled"}><span aria-hidden="true">IDE</span><b>Editor</b></button>
-      <button class="card-icon-action" data-project-action="terminal" data-project-id="${project.id}" aria-label="Terminal hier öffnen" ${state.capabilities?.terminal.available ? "" : "disabled"}><span aria-hidden="true">&gt;_</span><b>Terminal</b></button>
-      <button class="card-icon-action" data-project-action="folder" data-project-id="${project.id}" aria-label="Ordner öffnen"><span aria-hidden="true">▱</span><b>Ordner</b></button>
-      <button class="card-icon-action" data-copy-path="${project.id}" aria-label="Pfad kopieren"><span aria-hidden="true">⧉</span><b>Pfad</b></button>
+      <button class="card-icon-action" data-project-action="editor" data-project-id="${project.id}" aria-label="In ${escapeHtml(editorName)} öffnen" ${state.capabilities?.editor.available ? "" : "disabled"}><i class="fa-solid fa-code" aria-hidden="true"></i><b>Editor</b></button>
+      <button class="card-icon-action" data-project-action="terminal" data-project-id="${project.id}" aria-label="Terminal hier öffnen" ${state.capabilities?.terminal.available ? "" : "disabled"}><i class="fa-solid fa-terminal" aria-hidden="true"></i><b>Terminal</b></button>
+      <button class="card-icon-action" data-project-action="folder" data-project-id="${project.id}" aria-label="Ordner öffnen"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><b>Ordner</b></button>
+      <button class="card-icon-action" data-copy-path="${project.id}" aria-label="Pfad kopieren"><i class="fa-regular fa-copy" aria-hidden="true"></i><b>Pfad</b></button>
     </div>
   </article>`;
 }
@@ -284,12 +300,9 @@ function projectListItem(project) {
   const running = projectIsRunning(project);
   const status = projectState(project);
   const [symbol, className] = techClass(project);
-  const expanded = state.expandedProjects.has(project.id);
-  const focusedLauncher = preferredLauncher(project);
-  const visibleLaunchers = expanded ? project.launchers : focusedLauncher ? [focusedLauncher] : [];
-  const hiddenLauncherCount = Math.max(0, project.launchers.length - visibleLaunchers.length);
   const favorite = state.favorites.has(project.id);
   const editorName = state.capabilities?.editor.name || "Editor";
+  const hasDirectLaunchAction = Boolean(browserUrl(project) || preferredLauncher(project));
   const visibleTechnologies = project.technologies.slice(0, 3);
   const extraTechnologies = Math.max(0, project.technologies.length - visibleTechnologies.length);
   const projectMeta = project.git
@@ -312,22 +325,24 @@ function projectListItem(project) {
           <div class="list-project-meta">${projectMeta}<span class="meta-time">${relativeTime(project.modifiedAt)}</span></div>
         </div>
       </div>
-      <button class="favorite-button ${favorite ? "active" : ""}" data-favorite="${project.id}" data-focus-key="fav-${project.id}" aria-label="${favorite ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}" aria-pressed="${favorite}">${favoriteIcon()}</button>
+      <button class="favorite-button ${favorite ? "active" : ""}" data-favorite="${project.id}" data-focus-key="fav-${project.id}" aria-label="${favorite ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}" aria-pressed="${favorite}">${favoriteIcon(favorite)}</button>
     </section>
     <section class="launcher-panel list-launchers" aria-label="Starter für ${escapeHtml(project.name)}">
       <div class="list-launcher-head">
-        <span>${expanded ? "Alle Starter" : "Bevorzugter Starter"}</span><b>${project.launchers.length}</b>
-        ${project.launchers.length > 1 ? `<button class="list-launcher-toggle" data-expand="${project.id}">${expanded ? "Reduzieren" : `+${hiddenLauncherCount} weitere`}</button>` : ""}
+        <span>Alle Starter</span><b>${project.launchers.length}</b>
       </div>
-      ${visibleLaunchers.length ? visibleLaunchers.map(launcherRow).join("") : '<p class="list-no-launcher">Kein automatischer Starter erkannt</p>'}
+      ${project.launchers.length ? project.launchers.map(launcherRow).join("") : '<p class="list-no-launcher">Kein automatischer Starter erkannt</p>'}
     </section>
     <div class="card-actions list-actions">
-      ${primaryAction(project)}
-      <div class="list-utility-actions" aria-label="Projektaktionen">
-        <button class="card-icon-action" data-project-action="editor" data-project-id="${project.id}" aria-label="In ${escapeHtml(editorName)} öffnen" ${state.capabilities?.editor.available ? "" : "disabled"}><span aria-hidden="true">IDE</span><b>Editor</b></button>
-        <button class="card-icon-action" data-project-action="terminal" data-project-id="${project.id}" aria-label="Terminal hier öffnen" ${state.capabilities?.terminal.available ? "" : "disabled"}><span aria-hidden="true">&gt;_</span><b>Terminal</b></button>
-        <button class="card-icon-action" data-project-action="folder" data-project-id="${project.id}" aria-label="Ordner öffnen"><span aria-hidden="true">▱</span><b>Ordner</b></button>
-        <button class="card-icon-action" data-copy-path="${project.id}" aria-label="Pfad kopieren"><span aria-hidden="true">⧉</span><b>Pfad</b></button>
+      <span class="list-actions-label">Projekt steuern</span>
+      <div class="list-action-grid">
+        ${primaryAction(project, true)}
+        <div class="list-utility-actions" aria-label="Projektaktionen">
+          <button class="card-icon-action" data-project-action="editor" data-project-id="${project.id}" aria-label="In ${escapeHtml(editorName)} öffnen" title="In ${escapeHtml(editorName)} öffnen" ${state.capabilities?.editor.available ? "" : "disabled"}><i class="fa-solid fa-code" aria-hidden="true"></i><b>Editor</b></button>
+          <button class="card-icon-action" data-project-action="terminal" data-project-id="${project.id}" aria-label="Terminal hier öffnen" title="Terminal hier öffnen" ${state.capabilities?.terminal.available ? "" : "disabled"}><i class="fa-solid fa-terminal" aria-hidden="true"></i><b>Terminal</b></button>
+          ${hasDirectLaunchAction ? `<button class="card-icon-action" data-project-action="folder" data-project-id="${project.id}" aria-label="Ordner öffnen" title="Ordner öffnen"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><b>Ordner</b></button>` : ""}
+          <button class="card-icon-action" data-copy-path="${project.id}" aria-label="Pfad kopieren" title="Pfad kopieren"><i class="fa-regular fa-copy" aria-hidden="true"></i><b>Pfad</b></button>
+        </div>
       </div>
     </div>
   </article>`;
@@ -344,6 +359,35 @@ function activeGitFile(project) {
   if (first) state.activeGitFiles.set(project.id, first);
   else state.activeGitFiles.delete(project.id);
   return first;
+}
+
+function selectedGitFileSet(project) {
+  const available = new Set(project.git?.files.map((file) => file.path) || []);
+  const current = state.selectedGitFiles.get(project.id) || new Set();
+  const selected = new Set([...current].filter((file) => available.has(file)));
+  if (selected.size) state.selectedGitFiles.set(project.id, selected);
+  else state.selectedGitFiles.delete(project.id);
+  return selected;
+}
+
+function selectGitFile(projectId, file, additive = false) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project?.git?.files.some((item) => item.path === file)) return;
+  const selected = new Set(additive ? selectedGitFileSet(project) : []);
+  if (additive && selected.has(file)) selected.delete(file);
+  else selected.add(file);
+  if (selected.size) state.selectedGitFiles.set(projectId, selected);
+  else state.selectedGitFiles.delete(projectId);
+  if (selected.has(file) || !additive) loadGitDiff(projectId, file);
+  else renderGitSurfaces();
+}
+
+function selectAllGitFiles(projectId, selected) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project?.git) return;
+  if (selected) state.selectedGitFiles.set(projectId, new Set(project.git.files.map((file) => file.path)));
+  else state.selectedGitFiles.delete(projectId);
+  renderGitSurfaces();
 }
 
 function diffKey(projectId, file) {
@@ -393,7 +437,7 @@ function gitDiffViewer(project) {
     if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
   }));
   return `<section class="git-diff-panel">
-    <div class="git-diff-head"><strong title="${escapeHtml(file)}">${escapeHtml(file)}</strong><div><span class="diff-additions">+${additions}</span><span class="diff-deletions">−${deletions}</span><button data-reload-diff data-project-id="${project.id}" data-file="${escapeHtml(file)}" title="Diff neu laden">↻</button></div></div>
+    <div class="git-diff-head"><strong title="${escapeHtml(file)}">${escapeHtml(file)}</strong><div><span class="diff-additions">+${additions}</span><span class="diff-deletions">−${deletions}</span><button data-reload-diff data-project-id="${project.id}" data-file="${escapeHtml(file)}" title="Diff neu laden"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button></div></div>
     <div class="git-diff-scroll">
       ${data.sections.map((section) => `<section class="diff-section ${section.scope}"><header><i></i>${escapeHtml(section.label)}</header><div class="diff-code">${renderPatch(section.patch)}</div>${section.truncated ? '<div class="diff-limit-note">Sehr großer Diff wurde gekürzt.</div>' : ""}</section>`).join("") || '<div class="diff-empty">Keine darstellbaren Textänderungen.</div>'}
     </div>
@@ -403,9 +447,14 @@ function gitDiffViewer(project) {
 async function loadGitDiff(projectId, file, force = false) {
   const key = diffKey(projectId, file);
   state.activeGitFiles.set(projectId, file);
-  if (!force && state.gitDiffs.has(key)) { renderProjectDialog(); return; }
+  if (!force && state.gitDiffs.has(key)) {
+    if (elements.projectDialog.open) renderProjectDialog();
+    if (state.page === "git") renderGitPage();
+    return;
+  }
   state.gitDiffLoading = key;
-  renderProjectDialog();
+  if (elements.projectDialog.open) renderProjectDialog();
+  if (state.page === "git") renderGitPage();
   try {
     const data = await api(`/api/projects/${projectId}/git/diff?file=${encodeURIComponent(file)}`);
     state.gitDiffs.set(key, data);
@@ -414,6 +463,123 @@ async function loadGitDiff(projectId, file, force = false) {
   } finally {
     if (state.gitDiffLoading === key) state.gitDiffLoading = null;
     if (state.activeProjectId === projectId && elements.projectDialog.open) renderProjectDialog();
+    if (state.page === "git" && state.activeGitProjectId === projectId) renderGitPage();
+  }
+}
+
+function renderGitSurfaces() {
+  if (elements.projectDialog.open) renderProjectDialog();
+  if (state.page === "git") renderGitPage();
+}
+
+function gitCommitKey(projectId, hash) {
+  return `${projectId}\u0000${hash}`;
+}
+
+function gitHistoryDate(isoDate) {
+  if (!isoDate) return "unbekannt";
+  return new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(isoDate));
+}
+
+function gitHistoryCommitRow(project, commit) {
+  const active = state.activeGitCommits.get(project.id) === commit.hash;
+  return `<button class="git-history-commit ${active ? "active" : ""}" data-git-commit="${commit.hash}" data-project-id="${project.id}" aria-pressed="${active}">
+    <span class="git-history-node"><i></i></span>
+    <span class="git-history-copy"><strong title="${escapeHtml(commit.subject)}">${escapeHtml(commit.subject)}</strong><small>${escapeHtml(commit.author)} · ${gitHistoryDate(commit.date)}</small></span>
+    <code>${escapeHtml(commit.shortHash)}</code>
+  </button>`;
+}
+
+function gitCommitViewer(project) {
+  const hash = state.activeGitCommits.get(project.id);
+  if (!hash) return `<section class="git-history-detail empty"><span><i class="fa-solid fa-code-commit" aria-hidden="true"></i></span><strong>Commit auswählen</strong><p>Wähle links einen Commit, um Dateien und Diff zu sehen.</p></section>`;
+  const key = gitCommitKey(project.id, hash);
+  if (state.gitCommitLoading === key) return `<section class="git-history-detail"><div class="git-history-detail-loading"><i></i>Commit wird geladen …</div></section>`;
+  const detail = state.gitCommitDetails.get(key);
+  if (detail?.error) return `<section class="git-history-detail"><div class="diff-error">${escapeHtml(detail.error)}</div></section>`;
+  if (!detail) return `<section class="git-history-detail empty"><span><i class="fa-solid fa-code-commit" aria-hidden="true"></i></span><strong>Commit auswählen</strong></section>`;
+  let additions = 0;
+  let deletions = 0;
+  detail.patch.split(/\r?\n/).forEach((line) => {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+  });
+  return `<section class="git-history-detail">
+    <header class="git-commit-head">
+      <div><p class="eyebrow">Ausgewählter Commit</p><h4>${escapeHtml(detail.subject)}</h4><span>${escapeHtml(detail.author)} · ${dateTime(detail.date)}</span></div>
+      <div class="git-commit-head-meta"><code>${escapeHtml(detail.shortHash)}</code><span class="diff-additions">+${additions}</span><span class="diff-deletions">−${deletions}</span></div>
+    </header>
+    <div class="git-commit-files" aria-label="Dateien im Commit">
+      ${detail.files.slice(0, 16).map((file) => `<span title="${escapeHtml(file.path)}"><b class="status-${escapeHtml(file.status)}">${escapeHtml(file.status)}</b>${escapeHtml(file.path)}</span>`).join("") || '<span class="empty">Keine geänderten Dateien erkannt</span>'}
+      ${detail.files.length > 16 ? `<span class="more">+${detail.files.length - 16} weitere</span>` : ""}
+    </div>
+    <div class="git-history-diff"><div class="diff-code">${detail.patch ? renderPatch(detail.patch) : '<div class="diff-empty">Dieser Commit enthält keinen darstellbaren Text-Diff.</div>'}</div>${detail.truncated ? '<div class="diff-limit-note">Sehr großer Commit-Diff wurde gekürzt.</div>' : ""}</div>
+  </section>`;
+}
+
+function gitHistoryView(project) {
+  const history = state.gitHistories.get(project.id);
+  const loading = state.gitHistoryLoading.has(project.id);
+  if (!history && loading) return `<div class="git-history-loading"><i></i><strong>Verlauf wird geladen</strong><span>Commits und Metadaten werden eingelesen …</span></div>`;
+  if (history?.error) return `<div class="git-history-loading error"><strong>Verlauf konnte nicht geladen werden</strong><span>${escapeHtml(history.error)}</span><button data-git-history-retry="${project.id}">Erneut laden</button></div>`;
+  const commits = history?.commits || [];
+  if (!commits.length) return `<div class="git-history-loading"><span class="history-empty-icon"><i class="fa-solid fa-code-commit" aria-hidden="true"></i></span><strong>Noch keine Commits</strong><span>Der Verlauf beginnt mit dem ersten Commit dieses Repositorys.</span></div>`;
+  if (!state.activeGitCommits.has(project.id)) state.activeGitCommits.set(project.id, commits[0].hash);
+  return `<div class="git-history-workbench">
+    <section class="git-history-list-panel">
+      <header><div><strong>Commit-Verlauf</strong><span>${commits.length}${history.hasMore ? "+" : ""} geladen</span></div><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i></header>
+      <div class="git-history-list">${commits.map((commit) => gitHistoryCommitRow(project, commit)).join("")}</div>
+      ${history.hasMore ? `<button class="git-history-more" data-git-history-more="${project.id}" ${loading ? "disabled" : ""}>${loading ? "Weitere Commits werden geladen …" : "Weitere Commits laden"}</button>` : `<p class="git-history-end"><i></i>Beginn des Repositorys</p>`}
+    </section>
+    ${gitCommitViewer(project)}
+  </div>`;
+}
+
+async function loadGitCommit(projectId, hash, force = false) {
+  if (!hash) return;
+  const key = gitCommitKey(projectId, hash);
+  state.activeGitCommits.set(projectId, hash);
+  if (!force && state.gitCommitDetails.has(key)) { renderGitSurfaces(); return; }
+  state.gitCommitLoading = key;
+  renderGitSurfaces();
+  try {
+    state.gitCommitDetails.set(key, await api(`/api/projects/${projectId}/git/commits/${hash}`));
+  } catch (error) {
+    state.gitCommitDetails.set(key, { error: error.message });
+  } finally {
+    if (state.gitCommitLoading === key) state.gitCommitLoading = null;
+    renderGitSurfaces();
+  }
+}
+
+async function loadGitHistory(projectId, more = false, force = false) {
+  if (state.gitHistoryLoading.has(projectId)) return;
+  const existing = state.gitHistories.get(projectId);
+  if (!more && !force && existing?.commits?.length) {
+    const hash = state.activeGitCommits.get(projectId) || existing.commits[0].hash;
+    if (!state.gitCommitDetails.has(gitCommitKey(projectId, hash))) loadGitCommit(projectId, hash);
+    else renderGitSurfaces();
+    return;
+  }
+  state.gitHistoryLoading.add(projectId);
+  if (!more) state.gitHistories.delete(projectId);
+  renderGitSurfaces();
+  try {
+    const offset = more && existing?.commits ? existing.commits.length : 0;
+    const data = await api(`/api/projects/${projectId}/git/history?offset=${offset}&limit=60`);
+    const commits = more && existing?.commits ? [...existing.commits, ...data.commits] : data.commits;
+    state.gitHistories.set(projectId, { commits, hasMore: data.hasMore });
+    if (commits.length) {
+      const active = state.activeGitCommits.get(projectId);
+      const hash = commits.some((commit) => commit.hash === active) ? active : commits[0].hash;
+      state.activeGitCommits.set(projectId, hash);
+      if (!state.gitCommitDetails.has(gitCommitKey(projectId, hash))) loadGitCommit(projectId, hash);
+    }
+  } catch (error) {
+    state.gitHistories.set(projectId, { error: error.message, commits: [], hasMore: false });
+  } finally {
+    state.gitHistoryLoading.delete(projectId);
+    renderGitSurfaces();
   }
 }
 
@@ -425,7 +591,9 @@ function gitFileRow(project, file) {
   const directory = slash >= 0 ? file.path.slice(0, slash + 1) : "";
   const name = slash >= 0 ? file.path.slice(slash + 1) : file.path;
   const pending = state.pendingGitAction?.startsWith(`${project.id}:`);
-  return `<div class="git-file-row ${activeGitFile(project) === file.path ? "active" : ""}" data-git-file="${escapeHtml(file.path)}" data-project-id="${project.id}" tabindex="0">
+  const selected = selectedGitFileSet(project).has(file.path);
+  return `<div class="git-file-row ${activeGitFile(project) === file.path ? "active" : ""} ${selected ? "selected" : ""}" data-git-file="${escapeHtml(file.path)}" data-project-id="${project.id}" tabindex="0" aria-selected="${selected}">
+    <label class="git-file-check" title="Datei auswählen"><input type="checkbox" data-git-select-file="${escapeHtml(file.path)}" data-project-id="${project.id}" ${selected ? "checked" : ""} ${pending ? "disabled" : ""}><span aria-hidden="true"><i class="fa-solid fa-check"></i></span><span class="sr-only">${escapeHtml(file.path)} auswählen</span></label>
     <span class="git-file-status status-${escapeHtml(primaryStatus)}" title="${escapeHtml(gitStatusLabel(primaryStatus))}">${escapeHtml(primaryStatus)}</span>
     <div class="git-file-path" title="${escapeHtml(file.path)}"><span>${escapeHtml(directory)}</span><strong>${escapeHtml(name)}</strong>${file.originalPath ? `<small>von ${escapeHtml(file.originalPath)}</small>` : ""}</div>
     <div class="git-file-flags">
@@ -433,86 +601,269 @@ function gitFileRow(project, file) {
       ${working && file.worktreeStatus !== "?" ? '<span class="file-flag working">lokal</span>' : ""}
       ${file.worktreeStatus === "?" ? '<span class="file-flag untracked">neu</span>' : ""}
     </div>
-    <button class="git-file-action ${staged ? "unstage" : "stage"}" data-git-action="${staged ? "unstage" : "stage"}" data-project-id="${project.id}" data-file="${escapeHtml(file.path)}" ${pending ? "disabled" : ""}>${staged ? "Entfernen" : "Vormerken"}</button>
+    <button class="git-file-action ${staged ? "unstage" : "stage"}" data-git-action="${staged ? "unstage" : "stage"}" data-project-id="${project.id}" data-file="${escapeHtml(file.path)}" aria-label="${staged ? "Vormerkung lösen" : "Datei vormerken"}: ${escapeHtml(file.path)}" title="${staged ? "Vormerkung lösen" : "Datei vormerken"}" ${pending ? "disabled" : ""}><i class="fa-solid ${staged ? "fa-minus" : "fa-plus"}" aria-hidden="true"></i><span>${staged ? "Lösen" : "Vormerken"}</span></button>
   </div>`;
 }
 
-function gitDetail(project) {
+function gitLastCommit(project) {
+  const commit = project.git?.lastCommit;
+  return commit ? `<div class="last-commit"><span class="commit-hash">${escapeHtml(commit.hash)}</span><div><strong>${escapeHtml(commit.subject)}</strong><small>${escapeHtml(commit.author)} · ${dateTime(commit.date)}</small></div></div>` : '<p class="git-empty-note">Noch kein Commit vorhanden.</p>';
+}
+
+function gitRemotePanel(project) {
   const git = project.git;
-  if (!git) return `<section class="detail-panel git-detail empty-git">
-    <div class="detail-section-head"><div><p class="eyebrow">Versionskontrolle</p><h3>Kein Git-Repository</h3></div></div>
-    <p>In diesem Projektordner wurde kein Repository erkannt. Du kannst direkt ein Terminal öffnen, um eines anzulegen.</p>
-    <button class="detail-secondary-action" data-project-action="terminal" data-project-id="${project.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}>&gt;_ Terminal öffnen</button>
-  </section>`;
+  const pending = state.pendingGitAction?.startsWith(`${project.id}:`);
+  const canPush = Boolean(git.remoteName && git.branch && (!git.upstream || git.ahead > 0));
+  const canFetch = Boolean(git.remoteName);
+  const canPull = Boolean(git.upstream && git.branch && git.behind > 0);
+  return `<div class="push-panel">
+    <div><strong>${git.upstream ? escapeHtml(git.upstream) : "Branch veröffentlichen"}</strong><span>${git.upstream ? `${git.ahead} voraus · ${git.behind} zurück` : `auf ${escapeHtml(git.remoteName || "Remote")}`}</span></div>
+    <div class="push-actions">
+      <button class="fetch-button" data-git-action="fetch" data-project-id="${project.id}" ${pending || !canFetch ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:fetch` ? "Abrufen …" : "Fetch"}</button>
+      <button class="pull-button" data-git-action="pull" data-project-id="${project.id}" ${pending || !canPull ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:pull` ? "Pull läuft …" : `Pull · ↓${git.behind}`}</button>
+      <button data-git-action="push" data-project-id="${project.id}" ${pending || !canPush ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:push` ? "Push läuft …" : git.upstream ? `Push · ↑${git.ahead}` : "Push & Upstream"}</button>
+    </div>
+  </div>`;
+}
+
+function gitInlineActions(project, surface) {
+  const branch = project.git?.branch || "detached HEAD";
+  return `<div class="detail-inline-actions">
+    ${surface === "drawer" ? `<button class="detail-secondary-action open-git-page-action" data-open-git-workspace="${project.id}"><i class="fa-solid fa-code-branch" aria-hidden="true"></i>In Git-Zentrale öffnen</button>` : ""}
+    ${project.git?.remoteUrl ? `<a class="detail-secondary-action" href="${escapeHtml(project.git.remoteUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>Remote öffnen</a>` : ""}
+    <button class="detail-secondary-action" data-copy-value="${escapeHtml(branch)}" data-copy-label="Branch kopiert.">Branch kopieren</button>
+    <button class="detail-secondary-action" data-project-action="terminal" data-project-id="${project.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}><i class="fa-solid fa-terminal" aria-hidden="true"></i>Terminal</button>
+  </div>`;
+}
+
+function gitSelectionToolbar(project) {
+  const git = project.git;
+  const selected = selectedGitFileSet(project);
+  const files = git.files.filter((file) => selected.has(file.path));
+  const pending = state.pendingGitAction?.startsWith(`${project.id}:`);
+  const canStage = files.some((file) => file.worktreeStatus !== "." || file.indexStatus === "?");
+  const canUnstage = files.some((file) => file.indexStatus !== "." && file.indexStatus !== "?");
+  const allSelected = git.files.length > 0 && selected.size === git.files.length;
+  return `<div class="git-selection-bar ${selected.size ? "has-selection" : ""}">
+    <label class="git-select-all ${selected.size && !allSelected ? "partial" : ""}" title="Alle angezeigten Dateien auswählen">
+      <input type="checkbox" data-git-select-all="${project.id}" ${allSelected ? "checked" : ""} ${pending ? "disabled" : ""}>
+      <span aria-hidden="true"><i class="fa-solid ${selected.size && !allSelected ? "fa-minus" : "fa-check"}"></i></span>
+      <span class="sr-only">Alle angezeigten Dateien auswählen</span>
+    </label>
+    <div class="git-selection-copy"><strong>${selected.size ? `${selected.size} ausgewählt` : "Dateien auswählen"}</strong><small>${selected.size ? "Aktionen gelten für die Auswahl" : "Checkbox oder Strg/Cmd für Mehrfachauswahl"}</small></div>
+    <div class="git-selection-actions">
+      <button class="stage" data-git-selection-action="stage-files" data-project-id="${project.id}" ${pending || !canStage ? "disabled" : ""}><i class="fa-solid fa-plus" aria-hidden="true"></i>Vormerken</button>
+      <button data-git-selection-action="unstage-files" data-project-id="${project.id}" ${pending || !canUnstage ? "disabled" : ""}><i class="fa-solid fa-minus" aria-hidden="true"></i>Lösen</button>
+      <button class="discard" data-git-selection-action="discard-files" data-project-id="${project.id}" ${pending || !selected.size ? "disabled" : ""}><i class="fa-solid fa-rotate-left" aria-hidden="true"></i>Verwerfen</button>
+    </div>
+  </div>`;
+}
+
+function gitChangesView(project, surface) {
+  const git = project.git;
+  const changes = git.changedFiles ?? git.files.length;
+  const pending = state.pendingGitAction?.startsWith(`${project.id}:`);
+  if (!changes) return `<div class="git-clean-layout">
+    <section class="git-clean-summary">
+      <span><i class="fa-solid fa-check" aria-hidden="true"></i></span>
+      <div><p class="eyebrow">Arbeitsbaum</p><h4>Alles committed</h4><p>Keine lokalen Änderungen. Der Verlauf und Remote-Stand sind bereit.</p></div>
+      <button data-git-mode="history" data-project-id="${project.id}"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>Verlauf öffnen</button>
+    </section>
+    <aside class="git-clean-side"><div><p class="eyebrow">Letzter Commit</p>${gitLastCommit(project)}</div>${gitRemotePanel(project)}${gitInlineActions(project, surface)}</aside>
+  </div>`;
+  const draft = state.gitCommitMessages.get(project.id) || "";
+  const commitInputId = surface === "page" ? "git-page-commit-message" : "git-commit-message";
+  return `<div class="git-workbench">
+    <div class="git-files-panel">
+      <div class="git-files-head"><div><strong>Geänderte Dateien</strong><span>${changes}${git.filesTruncated ? "+" : ""} im Arbeitsbaum</span></div><div>
+        <button data-git-action="refresh" data-project-id="${project.id}" ${pending ? "disabled" : ""} title="Git-Status aktualisieren"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button>
+        <button data-git-action="${git.staged ? "unstage-all" : "stage-all"}" data-project-id="${project.id}" ${pending ? "disabled" : ""}>${git.staged ? "Vormerkungen lösen" : "Alle vormerken"}</button>
+      </div></div>
+      ${gitSelectionToolbar(project)}
+      <div class="git-file-list">${git.files.map((file) => gitFileRow(project, file)).join("")}${git.filesTruncated ? '<p class="git-files-truncated">Weitere Dateien werden aus Performancegründen nicht einzeln angezeigt. „Alle vormerken“ erfasst sie trotzdem.</p>' : ""}</div>
+    </div>
+    ${gitDiffViewer(project)}
+    <aside class="git-commit-panel">
+      <div><p class="eyebrow">Letzter Commit</p>${gitLastCommit(project)}</div>
+      <div class="commit-composer"><label for="${commitInputId}">Commit-Nachricht <span>${git.staged} vorgemerkt</span></label><input id="${commitInputId}" data-commit-message="${project.id}" data-focus-key="git-commit-${project.id}" value="${escapeHtml(draft)}" maxlength="200" placeholder="Was wurde geändert?" autocomplete="off"><button class="git-commit-button" data-git-action="commit" data-project-id="${project.id}" ${pending || !git.staged || draft.trim().length < 3 ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:commit` ? "Commit läuft …" : "Commit erstellen"}</button><small>Der Commit enthält nur vorgemerkte Dateien.</small></div>
+      ${gitRemotePanel(project)}${gitInlineActions(project, surface)}
+    </aside>
+  </div>`;
+}
+
+function gitDetail(project, surface = "drawer") {
+  const git = project.git;
+  if (!git) return `<section class="detail-panel git-detail empty-git"><div class="detail-section-head"><div><p class="eyebrow">Versionskontrolle</p><h3>Kein Git-Repository</h3></div></div><p>In diesem Projektordner wurde kein Repository erkannt. Du kannst direkt ein Terminal öffnen, um eines anzulegen.</p><button class="detail-secondary-action" data-project-action="terminal" data-project-id="${project.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}>&gt;_ Terminal öffnen</button></section>`;
   const changes = git.changedFiles ?? git.files.length;
   const branch = git.branch || "detached HEAD";
-  const repoHint = git.repositoryRoot === "." ? "im Projektstamm" : `in ${git.repositoryRoot}`;
-  const pending = state.pendingGitAction?.startsWith(`${project.id}:`);
-  const draft = state.gitCommitMessages.get(project.id) || "";
-  const canPush = Boolean(git.remoteName && git.branch && (!git.upstream || git.ahead > 0));
-  return `<section class="detail-panel git-detail">
-    <div class="detail-section-head">
-      <div><p class="eyebrow">Git · ${escapeHtml(repoHint)}</p><h3>${escapeHtml(branch)}</h3></div>
-      <span class="git-health ${git.dirty ? "dirty" : "clean"}"><i></i>${git.dirty ? `${changes} Änderung${changes === 1 ? "" : "en"}` : "Arbeitsbaum sauber"}</span>
+  const repoHint = git.repositoryRoot === "." ? "Projektstamm" : git.repositoryRoot;
+  return `<section class="detail-panel git-detail ${surface === "page" ? "git-page-detail" : ""}">
+    <div class="git-detail-toolbar">
+      <nav class="git-mode-tabs" aria-label="Git-Arbeitsmodus">
+        <button class="${state.gitMode === "changes" ? "active" : ""}" data-git-mode="changes" data-project-id="${project.id}" aria-pressed="${state.gitMode === "changes"}"><i class="fa-solid fa-code-branch" aria-hidden="true"></i>Änderungen <b>${changes}</b></button>
+        <button class="${state.gitMode === "history" ? "active" : ""}" data-git-mode="history" data-project-id="${project.id}" aria-pressed="${state.gitMode === "history"}"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>Verlauf</button>
+      </nav>
+      <span>Git · ${escapeHtml(repoHint)}</span>
     </div>
-    <div class="git-track" aria-label="Git-Status">
-      <div class="git-branch-line"><span class="git-node"></span><code>${escapeHtml(branch)}</code></div>
-      <div class="git-sync">
-        <span title="Lokale Commits vor dem Upstream">↑ ${git.ahead}</span>
-        <span title="Commits hinter dem Upstream">↓ ${git.behind}</span>
-        <small>${escapeHtml(git.remoteName || "kein Upstream")}</small>
-      </div>
+    <div class="git-status-strip" aria-label="Git-Status">
+      <div class="git-status-branch"><span class="git-node"></span><code>${escapeHtml(branch)}</code></div>
+      <span class="git-health ${git.dirty ? "dirty" : "clean"}"><i></i>${git.dirty ? `${changes} offen` : "sauber"}</span>
+      <div class="git-status-changes"><span><b>${git.staged}</b> vorgemerkt</span><span><b>${git.unstaged}</b> lokal</span><span><b>${git.untracked}</b> neu</span></div>
+      <div class="git-status-sync"><small>${escapeHtml(git.upstream || git.remoteName || "kein Remote")}</small><span>↑ ${git.ahead}</span><span>↓ ${git.behind}</span></div>
     </div>
-    <div class="git-change-grid">
-      <div><strong>${git.staged}</strong><span>vorgemerkt</span></div>
-      <div><strong>${git.unstaged}</strong><span>nicht vorgemerkt</span></div>
-      <div><strong>${git.untracked}</strong><span>unversioniert</span></div>
-    </div>
-    <div class="git-workbench">
-      <div class="git-files-panel">
-        <div class="git-files-head">
-          <div><strong>Geänderte Dateien</strong><span>${changes}${git.filesTruncated ? "+" : ""} im Arbeitsbaum</span></div>
-          <div>
-            <button data-git-action="refresh" data-project-id="${project.id}" ${pending ? "disabled" : ""} title="Git-Status aktualisieren">↻</button>
-            <button data-git-action="${git.staged ? "unstage-all" : "stage-all"}" data-project-id="${project.id}" ${pending || !changes ? "disabled" : ""}>${git.staged ? "Vormerkungen lösen" : "Alle vormerken"}</button>
-          </div>
-        </div>
-        <div class="git-file-list">
-          ${git.files.length ? git.files.map((file) => gitFileRow(project, file)).join("") : '<div class="git-file-empty"><span>✓</span><strong>Keine lokalen Änderungen</strong><small>Der Arbeitsbaum entspricht dem letzten Commit.</small></div>'}
-          ${git.filesTruncated ? '<p class="git-files-truncated">Weitere Dateien werden aus Performancegründen nicht einzeln angezeigt. „Alle vormerken“ erfasst sie trotzdem.</p>' : ""}
-        </div>
-      </div>
-      ${gitDiffViewer(project)}
-      <aside class="git-commit-panel">
-        <div>
-          <p class="eyebrow">Letzter Commit</p>
-          ${git.lastCommit ? `<div class="last-commit">
-            <span class="commit-hash">${escapeHtml(git.lastCommit.hash)}</span>
-            <div><strong>${escapeHtml(git.lastCommit.subject)}</strong><small>${escapeHtml(git.lastCommit.author)} · ${dateTime(git.lastCommit.date)}</small></div>
-          </div>` : '<p class="git-empty-note">Noch kein Commit vorhanden.</p>'}
-        </div>
-        <div class="commit-composer">
-          <label for="git-commit-message">Commit-Nachricht <span>${git.staged} vorgemerkt</span></label>
-          <input id="git-commit-message" data-commit-message="${project.id}" value="${escapeHtml(draft)}" maxlength="200" placeholder="Was wurde geändert?" autocomplete="off">
-          <button class="git-commit-button" data-git-action="commit" data-project-id="${project.id}" ${pending || !git.staged || draft.trim().length < 3 ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:commit` ? "Commit läuft …" : "Commit erstellen"}</button>
-          <small>Der Commit enthält nur vorgemerkte Dateien.</small>
-        </div>
-        <div class="push-panel">
-          <div><strong>${git.upstream ? escapeHtml(git.upstream) : "Branch veröffentlichen"}</strong><span>${git.upstream ? `${git.ahead} voraus · ${git.behind} zurück` : `auf ${escapeHtml(git.remoteName || "Remote")}`}</span></div>
-          <button data-git-action="push" data-project-id="${project.id}" ${pending || !canPush ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:push` ? "Push läuft …" : git.upstream ? `Push · ↑${git.ahead}` : "Push & Upstream"}</button>
-        </div>
-        <div class="detail-inline-actions">
-          ${git.remoteUrl ? `<a class="detail-secondary-action" href="${escapeHtml(git.remoteUrl)}" target="_blank" rel="noopener noreferrer">Remote öffnen ↗</a>` : ""}
-          <button class="detail-secondary-action" data-copy-value="${escapeHtml(branch)}" data-copy-label="Branch kopiert.">Branch kopieren</button>
-          <button class="detail-secondary-action" data-project-action="terminal" data-project-id="${project.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}>&gt;_ Terminal</button>
-        </div>
-      </aside>
-    </div>
+    ${state.gitMode === "history" ? gitHistoryView(project) : gitChangesView(project, surface)}
   </section>`;
 }
 
 function gitOverview(project) {
   return `<section class="detail-panel git-overview empty-git-overview"><div><p class="eyebrow">Versionskontrolle</p><h3>Kein Git-Repository</h3></div><p>Für dieses Projekt wurde kein Repository erkannt.</p></section>`;
+}
+
+function gitRepositoryTone(project) {
+  const git = project.git;
+  if (!git) return "clean";
+  if (gitConflictCount(git)) return "conflict";
+  if (git.dirty) return "changes";
+  if (git.behind) return "behind";
+  if (git.ahead) return "ahead";
+  return "clean";
+}
+
+function gitRepositoryMatches(project, filter) {
+  const git = project.git;
+  if (!git) return false;
+  if (filter === "changed") return git.dirty;
+  if (filter === "staged") return git.staged > 0;
+  if (filter === "sync") return git.ahead > 0 || git.behind > 0;
+  if (filter === "conflicts") return gitConflictCount(git) > 0;
+  if (filter === "clean") return !git.dirty && git.ahead === 0 && git.behind === 0;
+  return true;
+}
+
+function gitRepositoryItem(project) {
+  const git = project.git;
+  const status = gitStatusPresentation(git);
+  const selected = project.id === state.activeGitProjectId;
+  const changes = git.changedFiles ?? git.files.length;
+  const conflicts = gitConflictCount(git);
+  return `<button class="git-repository-item ${gitRepositoryTone(project)} ${selected ? "active" : ""}" data-git-repository="${project.id}" aria-pressed="${selected}">
+    <span class="git-repository-node"><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span>
+    <span class="git-repository-copy">
+      <strong>${escapeHtml(project.name)}</strong>
+      <code title="${escapeHtml(project.relativePath)}">${escapeHtml(project.relativePath)}</code>
+      <span><b>${escapeHtml(git.branch || "detached")}</b><em>${escapeHtml(status.label)}</em></span>
+    </span>
+    <span class="git-repository-signals">
+      ${conflicts ? `<b class="conflict"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>${conflicts}</b>` : ""}
+      ${changes ? `<b class="changes" title="Offene Änderungen">${changes}</b>` : ""}
+      ${git.ahead ? `<b class="ahead" title="Commits voraus">↑${git.ahead}</b>` : ""}
+      ${git.behind ? `<b class="behind" title="Commits zurück">↓${git.behind}</b>` : ""}
+    </span>
+  </button>`;
+}
+
+function renderGitPage() {
+  const repositories = state.projects.filter((project) => project.git).sort((a, b) => {
+    const priority = (project) => gitConflictCount(project.git) * 1000 + Number(project.git.dirty) * 100 + (project.git.ahead + project.git.behind) * 10;
+    return priority(b) - priority(a) || a.name.localeCompare(b.name, "de");
+  });
+  const query = state.gitQuery.trim().toLocaleLowerCase("de");
+  const visible = repositories.filter((project) => gitRepositoryMatches(project, state.gitFilter) && (!query || [project.name, project.relativePath, project.git.branch, project.git.remoteName, project.git.lastCommit?.subject]
+    .join(" ").toLocaleLowerCase("de").includes(query)));
+  if (!repositories.some((project) => project.id === state.activeGitProjectId)) state.activeGitProjectId = repositories[0]?.id || null;
+  if (visible.length && !visible.some((project) => project.id === state.activeGitProjectId)) state.activeGitProjectId = visible[0].id;
+  const selected = repositories.find((project) => project.id === state.activeGitProjectId) || null;
+  const changedRepositories = repositories.filter((project) => project.git.dirty).length;
+  const changedFiles = repositories.reduce((sum, project) => sum + (project.git.changedFiles ?? project.git.files.length), 0);
+  const syncRepositories = repositories.filter((project) => project.git.ahead || project.git.behind).length;
+  const conflicts = repositories.reduce((sum, project) => sum + gitConflictCount(project.git), 0);
+  const filterLabels = { all: "Alle", changed: "Geändert", staged: "Vorgemerkt", sync: "Synchronisieren", conflicts: "Konflikte", clean: "Sauber" };
+  const filters = Object.entries(filterLabels).map(([filter, label]) => `<button class="${state.gitFilter === filter ? "active" : ""}" data-git-filter="${filter}" aria-pressed="${state.gitFilter === filter}">${label}</button>`).join("");
+
+  elements.gitPage.innerHTML = `<header class="git-command-deck">
+    <div class="git-command-title">
+      <span class="git-command-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <div><p class="eyebrow">Repository control</p><h1>Git-Zentrale</h1><span>${repositories.length} Repositories · ein Arbeitsstand</span></div>
+    </div>
+    <div class="git-command-metrics" aria-label="Git-Status im Workspace">
+      <button data-git-filter="all"><i class="metric-dot repositories"></i><span><strong>${repositories.length}</strong><small>Repositories</small></span></button>
+      <button data-git-filter="changed"><i class="metric-dot changes"></i><span><strong>${changedFiles}</strong><small>offene Dateien</small></span></button>
+      <button data-git-filter="sync"><i class="metric-dot sync"></i><span><strong>${syncRepositories}</strong><small>zu synchronisieren</small></span></button>
+      <button data-git-filter="conflicts"><i class="metric-dot ${conflicts ? "conflicts" : "clean"}"></i><span><strong>${conflicts}</strong><small>Konflikte</small></span></button>
+    </div>
+    <button class="git-command-refresh" data-rescan-workspace title="Alle Repositories neu einlesen"><i class="fa-solid fa-rotate" aria-hidden="true"></i><span>Status aktualisieren</span></button>
+  </header>
+  <div class="git-page-toolbar">
+    <div class="git-filter-tabs" aria-label="Repositories filtern">${filters}</div>
+    <span><b>${visible.length}</b> von ${repositories.length} Repositories</span>
+  </div>
+  ${repositories.length ? `<div class="git-console">
+    <aside class="git-repository-rail" aria-label="Repositories">
+      <header><div><p class="eyebrow">Workspace inbox</p><strong>Repositories</strong></div><span>${changedRepositories} aktiv</span></header>
+      <div class="git-repository-list">
+        ${visible.map(gitRepositoryItem).join("") || `<div class="git-repository-empty"><i class="fa-solid fa-filter-circle-xmark" aria-hidden="true"></i><strong>Kein Treffer</strong><span>Ändere Filter oder Suche.</span></div>`}
+      </div>
+    </aside>
+    <section class="git-page-workbench" aria-live="polite">
+      ${selected && visible.length ? `<header class="git-selected-header">
+        <div class="git-selected-identity">
+          <span class="git-selected-symbol"><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span>
+          <div><p class="eyebrow">Ausgewähltes Repository</p><h2>${escapeHtml(selected.name)}</h2><code>${escapeHtml(selected.relativePath)}</code></div>
+        </div>
+        <div class="git-selected-actions">
+          <button data-open-details="${selected.id}"><i class="fa-regular fa-window-restore" aria-hidden="true"></i><span>Projekt</span></button>
+          <button data-project-action="editor" data-project-id="${selected.id}" ${state.capabilities?.editor.available ? "" : "disabled"}><i class="fa-solid fa-code" aria-hidden="true"></i><span>${escapeHtml(state.capabilities?.editor.name || "Editor")}</span></button>
+          <button data-project-action="terminal" data-project-id="${selected.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}><i class="fa-solid fa-terminal" aria-hidden="true"></i><span>Terminal</span></button>
+        </div>
+      </header>${gitDetail(selected, "page")}` : `<div class="git-workbench-empty"><span><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><strong>Kein Repository ausgewählt</strong><p>Wähle links ein Repository oder passe den Filter an.</p></div>`}
+    </section>
+  </div>` : `<section class="git-page-empty"><span><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><h2>Noch keine Repositories</h2><p>DevHub zeigt hier jedes Git-Repository, das im gewählten Workspace erkannt wird.</p><button data-rescan-workspace>Workspace neu einlesen</button></section>`}`;
+}
+
+function renderWorkspaceNavigation() {
+  const gitActive = state.page === "git";
+  document.body.classList.toggle("git-page-active", gitActive);
+  elements.projectsPage.hidden = gitActive;
+  elements.gitPage.hidden = !gitActive;
+  document.querySelectorAll("[data-page]").forEach((button) => {
+    const active = button.dataset.page === "git" ? gitActive : !gitActive && (!button.dataset.filter || button.dataset.filter === state.filter);
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  elements.search.placeholder = gitActive ? "Repositories oder Branches durchsuchen …" : "Projekte durchsuchen …";
+}
+
+function loadGitSurfaceForProject(projectId, force = false) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project?.git) return;
+  if (state.gitMode === "history") loadGitHistory(projectId, false, force);
+  else {
+    const file = activeGitFile(project);
+    if (file) loadGitDiff(project.id, file, force);
+  }
+}
+
+function loadActiveGitSurface(force = false) {
+  if (state.page === "git" && state.activeGitProjectId) loadGitSurfaceForProject(state.activeGitProjectId, force);
+}
+
+function setWorkspacePage(page, projectId = null) {
+  const nextPage = page === "git" ? "git" : "projects";
+  if (projectId) {
+    state.activeGitProjectId = projectId;
+    localStorage.setItem("devhub_git_project", projectId);
+  }
+  state.page = nextPage;
+  elements.search.value = nextPage === "git" ? state.gitQuery : state.query;
+  history.replaceState(null, "", nextPage === "git" ? "#git" : location.pathname + location.search);
+  render(false);
+  loadActiveGitSurface();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function openGitWorkspace(projectId) {
+  if (elements.projectDialog.open) elements.projectDialog.close();
+  setWorkspacePage("git", projectId);
 }
 
 function renderProjectDialog() {
@@ -533,17 +884,17 @@ function renderProjectDialog() {
       <div class="detail-title-row">
         ${project.thumbnailUrl ? `<img class="detail-symbol" src="${escapeHtml(project.thumbnailUrl)}" alt="">` : `<span class="stack-symbol detail-symbol">${escapeHtml(symbol)}</span>`}
         <div class="detail-title-copy"><p class="eyebrow">Projektakte</p><h2 id="project-dialog-title">${escapeHtml(project.name)}</h2><code>${escapeHtml(projectPath(project))}</code></div>
-        <button class="favorite-button detail-favorite ${favorite ? "active" : ""}" data-favorite="${project.id}" aria-label="${favorite ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}" aria-pressed="${favorite}">${favoriteIcon()}</button>
+        <button class="favorite-button detail-favorite ${favorite ? "active" : ""}" data-favorite="${project.id}" aria-label="${favorite ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}" aria-pressed="${favorite}">${favoriteIcon(favorite)}</button>
         <button class="project-dialog-close" data-close-project aria-label="Projektdetails schließen">×</button>
       </div>
       <p class="detail-description">${escapeHtml(project.description)}</p>
       <div class="detail-tech-list">${project.technologies.map((technology) => `<span class="tech-chip">${escapeHtml(technology)}</span>`).join("")}</div>
       <div class="detail-primary-actions">
         ${primaryAction(project)}
-        <button class="detail-action-button" data-project-action="editor" data-project-id="${project.id}" ${state.capabilities?.editor.available ? "" : "disabled"}>IDE <span>${escapeHtml(editorName)}</span></button>
-        <button class="detail-action-button" data-project-action="terminal" data-project-id="${project.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}>&gt;_ <span>Terminal</span></button>
-        <button class="detail-action-button" data-project-action="folder" data-project-id="${project.id}">▱ <span>Ordner</span></button>
-        <button class="detail-action-button" data-copy-path="${project.id}">⧉ <span>Pfad</span></button>
+        <button class="detail-action-button" data-project-action="editor" data-project-id="${project.id}" ${state.capabilities?.editor.available ? "" : "disabled"}><i class="fa-solid fa-code" aria-hidden="true"></i><span>${escapeHtml(editorName)}</span></button>
+        <button class="detail-action-button" data-project-action="terminal" data-project-id="${project.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}><i class="fa-solid fa-terminal" aria-hidden="true"></i><span>Terminal</span></button>
+        <button class="detail-action-button" data-project-action="folder" data-project-id="${project.id}"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><span>Ordner</span></button>
+        <button class="detail-action-button" data-copy-path="${project.id}"><i class="fa-regular fa-copy" aria-hidden="true"></i><span>Pfad</span></button>
       </div>
     </header>
     <div class="project-detail-body combined-body">
@@ -567,10 +918,9 @@ function openProjectDetails(projectId) {
   if (!project) return;
   state.activeProjectId = projectId;
   markRecent(projectId);
-  const file = activeGitFile(project);
   renderProjectDialog();
   if (!elements.projectDialog.open) elements.projectDialog.showModal();
-  if (file) loadGitDiff(projectId, file);
+  if (project.git) loadGitSurfaceForProject(projectId);
   renderStats();
 }
 
@@ -598,6 +948,7 @@ function renderStats() {
   elements.projectCount.textContent = state.projects.length;
   elements.launcherCount.textContent = launchers.length;
   elements.allCount.textContent = state.projects.length;
+  elements.gitRepositoryCount.textContent = state.projects.filter((project) => project.git).length;
   elements.favoriteCount.textContent = state.projects.filter((project) => state.favorites.has(project.id)).length;
   elements.recentCount.textContent = state.projects.filter((project) => state.recent.includes(project.id)).length;
   elements.runningFilterCount.textContent = state.projects.filter(projectIsRunning).length;
@@ -634,7 +985,8 @@ function renderServiceDock() {
   const webRunning = webOnline();
   elements.laragonToggle.disabled = !laragon.installed;
   elements.laragonToggleLabel.textContent = webRunning ? "Apache stoppen" : "Apache starten";
-  elements.laragonToggle.classList.toggle("secondary", webRunning);
+  elements.laragonToggle.classList.toggle("online", webRunning);
+  elements.laragonToggle.classList.toggle("offline", !webRunning);
   const runningUrls = state.projects.flatMap((project) => project.launchers)
     .filter((launcher) => launcher.runtime.status === "running" && launcher.runtime.url)
     .map((launcher) => launcher.runtime.url);
@@ -668,6 +1020,8 @@ function render(preserveFocus = true) {
   renderStats();
   renderTechFilters();
   renderServiceDock();
+  renderGitPage();
+  renderWorkspaceNavigation();
   document.querySelectorAll("[data-view]").forEach((button) => { button.classList.toggle("active", button.dataset.view === state.view); button.setAttribute("aria-pressed", String(button.dataset.view === state.view)); });
   document.querySelectorAll("[data-mobile-filter]").forEach((button) => { const active = button.dataset.mobileFilter === state.filter; button.classList.toggle("active", active); button.setAttribute("aria-pressed", String(active)); });
   if (elements.projectDialog.open && state.activeProjectId) renderProjectDialog();
@@ -698,6 +1052,7 @@ async function bootstrap() {
     elements.workspaceBrowse.hidden = !data.capabilities.folderPicker;
     elements.sort.value = state.sort;
     render(false);
+    loadActiveGitSurface();
     setTimeout(connectEvents, 1000);
     setInterval(refreshLaragon, 8000);
   } catch (error) {
@@ -712,7 +1067,11 @@ async function rescan() {
   try {
     const data = await api("/api/rescan", { method: "POST" });
     state.projects = data.projects;
+    state.selectedGitFiles.clear();
+    state.gitDiffs.clear();
+    state.gitHistories.clear();
     render(false);
+    loadActiveGitSurface(true);
     elements.scanStatus.textContent = `${state.projects.length} Projekte · gerade aktualisiert`;
     toast(`${state.projects.length} Projekte neu eingelesen.`);
   } catch (error) { elements.scanStatus.textContent = "Einlesen fehlgeschlagen"; toast(error.message, "error"); }
@@ -756,8 +1115,16 @@ async function saveWorkspace(event) {
     });
     setWorkspaceRoot(data.root);
     state.projects = data.projects;
+    state.activeGitProjectId = null;
+    state.activeGitFiles.clear();
+    state.selectedGitFiles.clear();
+    state.gitDiffs.clear();
+    state.gitHistories.clear();
+    state.activeGitCommits.clear();
+    state.gitCommitDetails.clear();
     elements.workspaceDialog.close();
     render(false);
+    loadActiveGitSurface();
     elements.scanStatus.textContent = `${state.projects.length} Projekte · Workspace aktualisiert`;
     toast(`Workspace gewechselt: ${data.root}`);
   } catch (error) {
@@ -800,11 +1167,34 @@ async function runProjectAction(projectId, action) {
   } catch (error) { toast(error.message, "error"); }
 }
 
+function selectedGitFilePaths(projectId) {
+  const project = state.projects.find((item) => item.id === projectId);
+  return project?.git ? [...selectedGitFileSet(project)] : [];
+}
+
+function openGitDiscardDialog(projectId, files) {
+  if (!files.length) return;
+  state.pendingGitDiscard = { projectId, files };
+  elements.discardCount.textContent = `${files.length} ${files.length === 1 ? "Datei ausgewählt" : "Dateien ausgewählt"}`;
+  const shown = files.slice(0, 6);
+  elements.discardFiles.innerHTML = shown.map((file) => `<code title="${escapeHtml(file)}">${escapeHtml(file)}</code>`).join("")
+    + (files.length > shown.length ? `<span>+${files.length - shown.length} weitere</span>` : "");
+  elements.discardDialog.showModal();
+}
+
+function runGitSelectionAction(projectId, action) {
+  const files = selectedGitFilePaths(projectId);
+  if (!files.length) return;
+  if (action === "discard-files") openGitDiscardDialog(projectId, files);
+  else runGitProjectAction(projectId, action, { files });
+}
+
 async function runGitProjectAction(projectId, action, payload = {}) {
   const projectIndex = state.projects.findIndex((item) => item.id === projectId);
-  if (projectIndex < 0 || state.pendingGitAction) return;
+  if (projectIndex < 0 || state.pendingGitAction) return false;
   state.pendingGitAction = `${projectId}:${action}`;
-  renderProjectDialog();
+  if (elements.projectDialog.open) renderProjectDialog();
+  if (state.page === "git") renderGitPage();
   try {
     const data = await api(`/api/projects/${projectId}/git/${action}`, {
       method: "POST",
@@ -812,17 +1202,22 @@ async function runGitProjectAction(projectId, action, payload = {}) {
       body: JSON.stringify(payload)
     });
     state.projects[projectIndex] = data.project;
-    if (action === "commit") state.gitCommitMessages.delete(projectId);
+    if (action === "commit") {
+      state.gitCommitMessages.delete(projectId);
+      state.activeGitCommits.delete(projectId);
+    }
+    if (action === "discard-files") state.selectedGitFiles.delete(projectId);
     for (const key of state.gitDiffs.keys()) if (key.startsWith(`${projectId}\u0000`)) state.gitDiffs.delete(key);
+    state.gitHistories.delete(projectId);
     toast(data.message);
+    return true;
   } catch (error) {
     toast(error.message, "error");
+    return false;
   } finally {
     state.pendingGitAction = null;
     render(false);
-    const current = state.projects.find((item) => item.id === projectId);
-    const file = current ? activeGitFile(current) : null;
-    if (file && elements.projectDialog.open) loadGitDiff(projectId, file, true);
+    if (elements.projectDialog.open || (state.page === "git" && state.activeGitProjectId === projectId)) loadGitSurfaceForProject(projectId, true);
   }
 }
 
@@ -903,7 +1298,9 @@ function resetFilters() {
 
 function setViewFilter(filter) {
   state.filter = filter;
-  document.querySelectorAll(".side-link").forEach((item) => { const active = item.dataset.filter === filter; item.classList.toggle("active", active); item.setAttribute("aria-pressed", String(active)); });
+  state.page = "projects";
+  elements.search.value = state.query;
+  history.replaceState(null, "", location.pathname + location.search);
   render(false);
 }
 
@@ -912,10 +1309,40 @@ function copyToClipboard(value, successMessage) {
 }
 
 function handleProjectInteraction(event) {
+  const repository = event.target.closest("[data-git-repository]");
+  if (repository) {
+    state.activeGitProjectId = repository.dataset.gitRepository;
+    localStorage.setItem("devhub_git_project", state.activeGitProjectId);
+    renderGitPage();
+    loadGitSurfaceForProject(state.activeGitProjectId);
+    return;
+  }
+  const mode = event.target.closest("[data-git-mode]");
+  if (mode) {
+    state.gitMode = mode.dataset.gitMode === "history" ? "history" : "changes";
+    localStorage.setItem("devhub_git_mode", state.gitMode);
+    renderGitSurfaces();
+    loadGitSurfaceForProject(mode.dataset.projectId);
+    return;
+  }
+  const historyRetry = event.target.closest("[data-git-history-retry]");
+  if (historyRetry) { loadGitHistory(historyRetry.dataset.gitHistoryRetry, false, true); return; }
+  const historyMore = event.target.closest("[data-git-history-more]");
+  if (historyMore) { loadGitHistory(historyMore.dataset.gitHistoryMore, true); return; }
+  const historyCommit = event.target.closest("[data-git-commit]");
+  if (historyCommit) { loadGitCommit(historyCommit.dataset.projectId, historyCommit.dataset.gitCommit); return; }
+  const gitWorkspace = event.target.closest("[data-open-git-workspace]");
+  if (gitWorkspace) { openGitWorkspace(gitWorkspace.dataset.openGitWorkspace); return; }
   const details = event.target.closest("[data-open-details]");
   if (details) { openProjectDetails(details.dataset.openDetails); return; }
   const favorite = event.target.closest("[data-favorite]");
   if (favorite) { const id = favorite.dataset.favorite; state.favorites.has(id) ? state.favorites.delete(id) : state.favorites.add(id); localStorage.setItem("devhub_favorites", JSON.stringify([...state.favorites])); render(); return; }
+  const selectAll = event.target.closest("[data-git-select-all]");
+  if (selectAll) { selectAllGitFiles(selectAll.dataset.gitSelectAll, selectAll.checked); return; }
+  const selectFile = event.target.closest("[data-git-select-file]");
+  if (selectFile) { selectGitFile(selectFile.dataset.projectId, selectFile.dataset.gitSelectFile, true); return; }
+  const selectionAction = event.target.closest("[data-git-selection-action]");
+  if (selectionAction) { runGitSelectionAction(selectionAction.dataset.projectId, selectionAction.dataset.gitSelectionAction); return; }
   const gitAction = event.target.closest("[data-git-action]");
   if (gitAction) {
     const action = gitAction.dataset.gitAction;
@@ -927,7 +1354,7 @@ function handleProjectInteraction(event) {
   const reloadDiff = event.target.closest("[data-reload-diff]");
   if (reloadDiff) { loadGitDiff(reloadDiff.dataset.projectId, reloadDiff.dataset.file, true); return; }
   const gitFile = event.target.closest("[data-git-file]");
-  if (gitFile) { loadGitDiff(gitFile.dataset.projectId, gitFile.dataset.gitFile); return; }
+  if (gitFile) { selectGitFile(gitFile.dataset.projectId, gitFile.dataset.gitFile, event.ctrlKey || event.metaKey); return; }
   const launcherAction = event.target.closest("[data-launcher-action]");
   if (launcherAction?.dataset.id) { runLauncher(launcherAction.dataset.id, launcherAction.dataset.launcherAction); return; }
   const projectAction = event.target.closest("[data-project-action]");
@@ -946,6 +1373,17 @@ function handleProjectInteraction(event) {
 
 elements.grid.addEventListener("click", handleProjectInteraction);
 elements.runtimeTopology.addEventListener("click", handleProjectInteraction);
+elements.gitPage.addEventListener("click", (event) => {
+  const filter = event.target.closest("[data-git-filter]");
+  if (filter) {
+    state.gitFilter = filter.dataset.gitFilter;
+    localStorage.setItem("devhub_git_filter", state.gitFilter);
+    renderGitPage();
+    return;
+  }
+  if (event.target.closest("[data-rescan-workspace]")) { rescan(); return; }
+  handleProjectInteraction(event);
+});
 elements.grid.addEventListener("keydown", (event) => {
   const card = event.target.closest("[data-project]");
   if (card && event.target === card && (event.key === "Enter" || event.key === " ")) {
@@ -957,37 +1395,64 @@ elements.projectDialogContent.addEventListener("click", (event) => {
   if (event.target.closest("[data-close-project]")) { elements.projectDialog.close(); return; }
   handleProjectInteraction(event);
 });
-elements.projectDialogContent.addEventListener("input", (event) => {
+function handleGitComposerInput(event) {
   const input = event.target.closest("[data-commit-message]");
   if (!input) return;
   state.gitCommitMessages.set(input.dataset.commitMessage, input.value);
-  const commitButton = elements.projectDialogContent.querySelector('[data-git-action="commit"]');
+  const commitButton = input.closest(".git-detail")?.querySelector('[data-git-action="commit"]');
   const project = state.projects.find((item) => item.id === input.dataset.commitMessage);
   if (commitButton && project?.git) commitButton.disabled = !project.git.staged || input.value.trim().length < 3 || Boolean(state.pendingGitAction);
-});
-elements.projectDialogContent.addEventListener("keydown", (event) => {
+}
+
+function handleGitKeyboard(event) {
+  const fileList = event.target.closest(".git-file-list");
+  if (fileList && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+    const row = fileList.querySelector("[data-git-file]");
+    if (row) { event.preventDefault(); selectAllGitFiles(row.dataset.projectId, true); }
+    return;
+  }
+  if (fileList && event.key === "Escape") {
+    const row = fileList.querySelector("[data-git-file]");
+    if (row) { event.preventDefault(); selectAllGitFiles(row.dataset.projectId, false); }
+    return;
+  }
+  const commit = event.target.closest("[data-git-commit]");
+  if (commit && event.target === commit && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault(); loadGitCommit(commit.dataset.projectId, commit.dataset.gitCommit); return;
+  }
   const file = event.target.closest("[data-git-file]");
   if (file && event.target === file && (event.key === "Enter" || event.key === " ")) {
-    event.preventDefault(); loadGitDiff(file.dataset.projectId, file.dataset.gitFile); return;
+    event.preventDefault(); selectGitFile(file.dataset.projectId, file.dataset.gitFile, event.ctrlKey || event.metaKey); return;
   }
   if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && event.target.matches("[data-commit-message]")) {
-    const button = elements.projectDialogContent.querySelector('[data-git-action="commit"]');
+    const button = event.target.closest(".git-detail")?.querySelector('[data-git-action="commit"]');
     if (button && !button.disabled) { event.preventDefault(); button.click(); }
   }
-});
+}
+
+elements.projectDialogContent.addEventListener("input", handleGitComposerInput);
+elements.projectDialogContent.addEventListener("keydown", handleGitKeyboard);
+elements.gitPage.addEventListener("input", handleGitComposerInput);
+elements.gitPage.addEventListener("keydown", handleGitKeyboard);
 elements.projectDialog.addEventListener("click", (event) => { if (event.target === elements.projectDialog) elements.projectDialog.close(); });
 elements.projectDialog.addEventListener("close", () => { state.activeProjectId = null; });
 
 document.querySelector("#view-filters").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-filter]"); if (!button) return;
-  setViewFilter(button.dataset.filter);
+  const button = event.target.closest("[data-page]"); if (!button) return;
+  if (button.dataset.filter) setViewFilter(button.dataset.filter);
+  else setWorkspacePage(button.dataset.page);
 });
+document.querySelector("#mobile-workspace-tabs").addEventListener("click", (event) => { const button = event.target.closest("[data-page]"); if (button) setWorkspacePage(button.dataset.page); });
 document.querySelector("#mobile-view-filters").addEventListener("click", (event) => { const button = event.target.closest("[data-mobile-filter]"); if (button) setViewFilter(button.dataset.mobileFilter); });
 elements.mobileTech.addEventListener("change", () => { state.technology = elements.mobileTech.value || null; render(false); });
 elements.techFilters.addEventListener("click", (event) => { const button = event.target.closest("[data-tech]"); if (!button) return; state.technology = state.technology === button.dataset.tech ? null : button.dataset.tech; render(false); });
 elements.clearTech.addEventListener("click", () => { state.technology = null; render(false); });
 elements.activeFilter.addEventListener("click", () => { state.technology = null; render(false); });
-elements.search.addEventListener("input", () => { state.query = elements.search.value; render(false); });
+elements.search.addEventListener("input", () => {
+  if (state.page === "git") state.gitQuery = elements.search.value;
+  else state.query = elements.search.value;
+  render(false);
+});
 elements.sort.addEventListener("change", () => { state.sort = elements.sort.value; localStorage.setItem("devhub_sort", state.sort); render(false); });
 document.querySelector(".view-switch").addEventListener("click", (event) => { const button = event.target.closest("[data-view]"); if (!button) return; state.view = button.dataset.view; localStorage.setItem("devhub_view", state.view); render(false); });
 elements.rescan.addEventListener("click", rescan); elements.emptyAction.addEventListener("click", () => state.projects.length ? resetFilters() : openWorkspaceSettings());
@@ -1006,6 +1471,25 @@ elements.runtimeDetails.addEventListener("click", () => {
 });
 document.querySelector("#mobile-search").addEventListener("click", () => { elements.search.scrollIntoView({ block: "center" }); elements.search.focus(); });
 document.querySelector("#close-log").addEventListener("click", () => elements.logDialog.close());
+elements.discardCancel.addEventListener("click", () => elements.discardDialog.close());
+elements.discardConfirm.addEventListener("click", async () => {
+  const pending = state.pendingGitDiscard;
+  if (!pending || elements.discardConfirm.disabled) return;
+  elements.discardConfirm.disabled = true;
+  elements.discardConfirm.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Wird verworfen …';
+  const success = await runGitProjectAction(pending.projectId, "discard-files", { files: pending.files });
+  if (success && elements.discardDialog.open) elements.discardDialog.close();
+  else {
+    elements.discardConfirm.disabled = false;
+    elements.discardConfirm.textContent = "Änderungen verwerfen";
+  }
+});
+elements.discardDialog.addEventListener("click", (event) => { if (event.target === elements.discardDialog) elements.discardDialog.close(); });
+elements.discardDialog.addEventListener("close", () => {
+  state.pendingGitDiscard = null;
+  elements.discardConfirm.disabled = false;
+  elements.discardConfirm.textContent = "Änderungen verwerfen";
+});
 document.querySelector("#clear-log").addEventListener("click", () => { elements.logOutput.innerHTML = '<span class="log-placeholder">Ansicht geleert. Neue Ausgaben erscheinen weiterhin live.</span>'; });
 elements.restartLog.addEventListener("click", () => { if (state.activeLogId) runLauncher(state.activeLogId, "restart"); });
 elements.logDialog.addEventListener("close", () => { state.activeLogId = null; }); elements.logDialog.addEventListener("click", (event) => { if (event.target === elements.logDialog) elements.logDialog.close(); });

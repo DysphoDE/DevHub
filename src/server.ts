@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, getAppDirectory, saveScanRoot } from "./config.js";
-import { readGitDiff, runGitAction, type GitAction, type GitActionPayload } from "./git-actions.js";
+import { readGitCommit, readGitDiff, readGitHistory, runGitAction, type GitAction, type GitActionPayload } from "./git-actions.js";
 import { getLaragonStatus, runLaragonAction, type LaragonAction } from "./laragon.js";
 import { ProcessManager } from "./process-manager.js";
 import { readGitInfo, scanWorkspace } from "./scanner.js";
@@ -14,6 +14,7 @@ import type { ProjectDefinition, PublicProject } from "./types.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.resolve(sourceDirectory, "../public");
+const fontAwesomeDirectory = path.resolve(sourceDirectory, "../node_modules/@fortawesome/fontawesome-free");
 const config = await loadConfig();
 const processManager = new ProcessManager();
 const capabilities = await getSystemCapabilities(config);
@@ -122,9 +123,15 @@ async function refreshProjectGit(project: ProjectDefinition): Promise<void> {
 }
 
 function serveStatic(requestPath: string, response: ServerResponse): void {
-  const requested = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
-  const resolved = path.resolve(publicDirectory, requested);
-  if (!resolved.startsWith(publicDirectory + path.sep) && resolved !== path.join(publicDirectory, "index.html")) {
+  const fontAwesomePrefix = "/vendor/fontawesome/";
+  const isFontAwesomeAsset = requestPath.startsWith(fontAwesomePrefix);
+  const requested = isFontAwesomeAsset
+    ? requestPath.slice(fontAwesomePrefix.length)
+    : requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
+  const rootDirectory = isFontAwesomeAsset ? fontAwesomeDirectory : publicDirectory;
+  const allowedFontAwesomeAsset = /^(?:css\/(?:fontawesome|solid|regular)\.min\.css|webfonts\/fa-(?:solid-900|regular-400)\.woff2)$/;
+  const resolved = path.resolve(rootDirectory, requested);
+  if ((isFontAwesomeAsset && !allowedFontAwesomeAsset.test(requested)) || (!resolved.startsWith(rootDirectory + path.sep) && resolved !== path.join(rootDirectory, "index.html"))) {
     sendJson(response, 404, { error: "Nicht gefunden" });
     return;
   }
@@ -132,7 +139,8 @@ function serveStatic(requestPath: string, response: ServerResponse): void {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
-    ".svg": "image/svg+xml"
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2"
   };
   stat(resolved).then((fileStats) => {
     if (!fileStats.isFile()) throw new Error("not a file");
@@ -261,7 +269,7 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const gitActionMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(refresh|stage|unstage|stage-all|unstage-all|commit|push)$/);
+    const gitActionMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(refresh|stage|unstage|stage-files|unstage-files|discard-files|stage-all|unstage-all|commit|fetch|pull|push)$/);
     if (request.method === "POST" && gitActionMatch) {
       if (!requireToken(request, response)) return;
       const project = projects.find((candidate) => candidate.id === gitActionMatch[1]);
@@ -286,6 +294,30 @@ const server = createServer(async (request, response) => {
       }
       const file = url.searchParams.get("file");
       sendJson(response, 200, { file, sections: await readGitDiff(project, file) });
+      return;
+    }
+
+    const gitHistoryMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/history$/);
+    if (request.method === "GET" && gitHistoryMatch) {
+      const project = projects.find((candidate) => candidate.id === gitHistoryMatch[1]);
+      if (!project?.git) {
+        sendJson(response, 404, { error: "Git-Repository nicht gefunden. Bitte Projekte neu einlesen." });
+        return;
+      }
+      const offset = Number(url.searchParams.get("offset") || 0);
+      const limit = Number(url.searchParams.get("limit") || 60);
+      sendJson(response, 200, await readGitHistory(project, offset, limit));
+      return;
+    }
+
+    const gitCommitMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/commits\/([0-9a-f]{7,40})$/i);
+    if (request.method === "GET" && gitCommitMatch) {
+      const project = projects.find((candidate) => candidate.id === gitCommitMatch[1]);
+      if (!project?.git) {
+        sendJson(response, 404, { error: "Git-Repository nicht gefunden. Bitte Projekte neu einlesen." });
+        return;
+      }
+      sendJson(response, 200, await readGitCommit(project, gitCommitMatch[2]));
       return;
     }
 
