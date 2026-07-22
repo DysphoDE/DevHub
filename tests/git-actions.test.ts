@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import { readGitCommit, readGitDiff, readGitHistory, runGitAction } from "../src/git-actions.js";
+import { readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage } from "../src/git-actions.js";
 import { readGitInfo, scanWorkspace } from "../src/scanner.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -53,10 +53,12 @@ test("listet Git-Dateien und committet nur vorgemerkte Änderungen", async () =>
     await runGitAction(project, "stage-files", { files: ["tracked.txt", "new file.txt"] });
     project.git = await readGitInfo(projectPath, projectPath);
     assert.equal(project.git?.staged, 2);
+    assert.equal(await suggestGitCommitMessage(project), "Update new file.txt and tracked.txt");
     await runGitAction(project, "unstage-files", { files: ["new file.txt"] });
     project.git = await readGitInfo(projectPath, projectPath);
     assert.equal(project.git?.staged, 1);
     assert.equal(project.git?.untracked, 1);
+    assert.equal(await suggestGitCommitMessage(project), "Update tracked.txt");
     const stagedDiff = await readGitDiff(project, "tracked.txt");
     assert.equal(stagedDiff[0].scope, "staged");
 

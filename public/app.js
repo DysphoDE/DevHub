@@ -21,6 +21,8 @@ const state = {
   activeProjectId: null,
   runtimeExpanded: localStorage.getItem("devhub_runtime_expanded") === "true",
   gitCommitMessages: new Map(),
+  gitSuggestedMessages: new Set(),
+  gitSuggestionLoading: new Set(),
   pendingGitAction: null,
   gitMode: localStorage.getItem("devhub_git_mode") === "history" ? "history" : "changes",
   activeGitFiles: new Map(),
@@ -672,6 +674,8 @@ function gitChangesView(project, surface) {
     <aside class="git-clean-side"><div><p class="eyebrow">Letzter Commit</p>${gitLastCommit(project)}</div>${gitRemotePanel(project)}${gitInlineActions(project, surface)}</aside>
   </div>`;
   const draft = state.gitCommitMessages.get(project.id) || "";
+  const suggested = state.gitSuggestedMessages.has(project.id);
+  const suggestionLoading = state.gitSuggestionLoading.has(project.id);
   const commitInputId = surface === "page" ? "git-page-commit-message" : "git-commit-message";
   return `<div class="git-workbench">
     <div class="git-files-panel">
@@ -685,7 +689,7 @@ function gitChangesView(project, surface) {
     ${gitDiffViewer(project)}
     <aside class="git-commit-panel">
       <div><p class="eyebrow">Letzter Commit</p>${gitLastCommit(project)}</div>
-      <div class="commit-composer"><label for="${commitInputId}">Commit-Nachricht <span>${git.staged} vorgemerkt</span></label><input id="${commitInputId}" data-commit-message="${project.id}" data-focus-key="git-commit-${project.id}" value="${escapeHtml(draft)}" maxlength="200" placeholder="Was wurde geändert?" autocomplete="off"><button class="git-commit-button" data-git-action="commit" data-project-id="${project.id}" ${pending || !git.staged || draft.trim().length < 3 ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:commit` ? "Commit läuft …" : "Commit erstellen"}</button><small>Der Commit enthält nur vorgemerkte Dateien.</small></div>
+      <div class="commit-composer ${suggested ? "suggested" : ""}"><label for="${commitInputId}">Commit-Nachricht <span class="commit-suggestion-status">${suggestionLoading ? "wird erstellt …" : suggested ? "Vorschlag" : `${git.staged} vorgemerkt`}</span></label><div class="commit-message-field"><input id="${commitInputId}" data-commit-message="${project.id}" data-focus-key="git-commit-${project.id}" value="${escapeHtml(draft)}" maxlength="200" placeholder="${suggestionLoading ? "Vorschlag wird erstellt …" : "Was wurde geändert?"}" autocomplete="off"><button type="button" class="commit-suggest-button" data-git-suggest-message="${project.id}" title="Commit-Vorschlag aktualisieren" aria-label="Commit-Vorschlag aktualisieren" ${pending || !git.staged || suggestionLoading ? "disabled" : ""}><i class="fa-solid ${suggestionLoading ? "fa-spinner fa-spin" : "fa-wand-magic-sparkles"}" aria-hidden="true"></i></button></div><button class="git-commit-button" data-git-action="commit" data-project-id="${project.id}" ${pending || !git.staged || draft.trim().length < 3 ? "disabled" : ""}>${state.pendingGitAction === `${project.id}:commit` ? "Commit läuft …" : "Commit erstellen"}</button><small class="commit-composer-note">${suggested ? '<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Automatisch vorgeschlagen · frei bearbeitbar' : "Der Commit enthält nur vorgemerkte Dateien."}</small></div>
       ${gitRemotePanel(project)}${gitInlineActions(project, surface)}
     </aside>
   </div>`;
@@ -833,11 +837,32 @@ function renderWorkspaceNavigation() {
   elements.search.placeholder = gitActive ? "Repositories oder Branches durchsuchen …" : "Projekte durchsuchen …";
 }
 
+async function loadGitCommitSuggestion(projectId, force = false) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project?.git?.staged || state.gitSuggestionLoading.has(projectId)) return;
+  if (!force && state.gitCommitMessages.has(projectId)) return;
+  state.gitSuggestionLoading.add(projectId);
+  renderGitSurfaces();
+  try {
+    const data = await api(`/api/projects/${projectId}/git/commit-message`);
+    if (force || !state.gitCommitMessages.has(projectId)) {
+      state.gitCommitMessages.set(projectId, data.message);
+      state.gitSuggestedMessages.add(projectId);
+    }
+  } catch (error) {
+    if (force) toast(error.message, "error");
+  } finally {
+    state.gitSuggestionLoading.delete(projectId);
+    renderGitSurfaces();
+  }
+}
+
 function loadGitSurfaceForProject(projectId, force = false) {
   const project = state.projects.find((item) => item.id === projectId);
   if (!project?.git) return;
   if (state.gitMode === "history") loadGitHistory(projectId, false, force);
   else {
+    loadGitCommitSuggestion(projectId);
     const file = activeGitFile(project);
     if (file) loadGitDiff(project.id, file, force);
   }
@@ -1070,6 +1095,9 @@ async function rescan() {
     state.selectedGitFiles.clear();
     state.gitDiffs.clear();
     state.gitHistories.clear();
+    for (const projectId of state.gitSuggestedMessages) state.gitCommitMessages.delete(projectId);
+    state.gitSuggestedMessages.clear();
+    state.gitSuggestionLoading.clear();
     render(false);
     loadActiveGitSurface(true);
     elements.scanStatus.textContent = `${state.projects.length} Projekte · gerade aktualisiert`;
@@ -1120,6 +1148,9 @@ async function saveWorkspace(event) {
     state.selectedGitFiles.clear();
     state.gitDiffs.clear();
     state.gitHistories.clear();
+    state.gitCommitMessages.clear();
+    state.gitSuggestedMessages.clear();
+    state.gitSuggestionLoading.clear();
     state.activeGitCommits.clear();
     state.gitCommitDetails.clear();
     elements.workspaceDialog.close();
@@ -1204,7 +1235,12 @@ async function runGitProjectAction(projectId, action, payload = {}) {
     state.projects[projectIndex] = data.project;
     if (action === "commit") {
       state.gitCommitMessages.delete(projectId);
+      state.gitSuggestedMessages.delete(projectId);
       state.activeGitCommits.delete(projectId);
+    }
+    if (["refresh", "stage", "unstage", "stage-files", "unstage-files", "stage-all", "unstage-all", "discard-files"].includes(action) && state.gitSuggestedMessages.has(projectId)) {
+      state.gitCommitMessages.delete(projectId);
+      state.gitSuggestedMessages.delete(projectId);
     }
     if (action === "discard-files") state.selectedGitFiles.delete(projectId);
     for (const key of state.gitDiffs.keys()) if (key.startsWith(`${projectId}\u0000`)) state.gitDiffs.delete(key);
@@ -1343,6 +1379,8 @@ function handleProjectInteraction(event) {
   if (selectFile) { selectGitFile(selectFile.dataset.projectId, selectFile.dataset.gitSelectFile, true); return; }
   const selectionAction = event.target.closest("[data-git-selection-action]");
   if (selectionAction) { runGitSelectionAction(selectionAction.dataset.projectId, selectionAction.dataset.gitSelectionAction); return; }
+  const suggestMessage = event.target.closest("[data-git-suggest-message]");
+  if (suggestMessage) { loadGitCommitSuggestion(suggestMessage.dataset.gitSuggestMessage, true); return; }
   const gitAction = event.target.closest("[data-git-action]");
   if (gitAction) {
     const action = gitAction.dataset.gitAction;
@@ -1398,9 +1436,17 @@ elements.projectDialogContent.addEventListener("click", (event) => {
 function handleGitComposerInput(event) {
   const input = event.target.closest("[data-commit-message]");
   if (!input) return;
-  state.gitCommitMessages.set(input.dataset.commitMessage, input.value);
+  const projectId = input.dataset.commitMessage;
+  const project = state.projects.find((item) => item.id === projectId);
+  state.gitCommitMessages.set(projectId, input.value);
+  state.gitSuggestedMessages.delete(projectId);
+  const composer = input.closest(".commit-composer");
+  composer?.classList.remove("suggested");
+  const note = composer?.querySelector(".commit-composer-note");
+  if (note) note.textContent = "Der Commit enthält nur vorgemerkte Dateien.";
+  const status = composer?.querySelector(".commit-suggestion-status");
+  if (status && project?.git) status.textContent = `${project.git.staged} vorgemerkt`;
   const commitButton = input.closest(".git-detail")?.querySelector('[data-git-action="commit"]');
-  const project = state.projects.find((item) => item.id === input.dataset.commitMessage);
   if (commitButton && project?.git) commitButton.disabled = !project.git.staged || input.value.trim().length < 3 || Boolean(state.pendingGitAction);
 }
 

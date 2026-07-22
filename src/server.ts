@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, getAppDirectory, saveScanRoot } from "./config.js";
-import { readGitCommit, readGitDiff, readGitHistory, runGitAction, type GitAction, type GitActionPayload } from "./git-actions.js";
+import { readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
 import { getLaragonStatus, runLaragonAction, type LaragonAction } from "./laragon.js";
 import { ProcessManager } from "./process-manager.js";
 import { readGitInfo, scanWorkspace } from "./scanner.js";
@@ -266,6 +266,17 @@ const server = createServer(async (request, response) => {
       }
       const message = await runProjectAction(config, project.absolutePath, projectActionMatch[2] as "folder" | "editor" | "terminal");
       sendJson(response, 200, { message });
+      return;
+    }
+
+    const gitMessageMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/commit-message$/);
+    if (request.method === "GET" && gitMessageMatch) {
+      const project = projects.find((candidate) => candidate.id === gitMessageMatch[1]);
+      if (!project?.git) {
+        sendJson(response, 404, { error: "Git-Repository nicht gefunden. Bitte Projekte neu einlesen." });
+        return;
+      }
+      sendJson(response, 200, { message: await suggestGitCommitMessage(project) });
       return;
     }
 

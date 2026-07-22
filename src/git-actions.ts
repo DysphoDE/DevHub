@@ -178,6 +178,48 @@ export async function readGitCommit(project: ProjectDefinition, requestedHash: u
   return { ...commit, files, ...result };
 }
 
+function commitTarget(files: GitInfoFile[]): string {
+  const paths = files.map((file) => file.path.toLocaleLowerCase("en"));
+  const every = (pattern: RegExp) => paths.every((file) => pattern.test(file));
+  const some = (pattern: RegExp) => paths.some((file) => pattern.test(file));
+  if (every(/(^|\/)(readme(?:\.|$)|docs?\/)|\.(md|mdx|rst)$/)) return "documentation";
+  if (every(/(^|\/)(__tests__|tests?|specs?)\/|\.(test|spec)\.[^.]+$/)) return "tests";
+  if (every(/(^|\/)(package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|composer(?:\.lock|\.json)|requirements[^/]*\.txt|pyproject\.toml)$/)) return "dependencies";
+  if (some(/(^|\/)git(?:[-_/]|\.)|git-actions|\.gitignore$/)) return "Git workflow";
+  if (every(/\.(css|scss|sass|less)$/)) return "styles";
+  if (every(/(^|\/)(public|client|frontend|ui)\//)) return "application interface";
+  if (every(/(^|\/)(src|server|backend)\//)) return "application logic";
+  if (every(/(^|\/)(\.github|config|configs)\/|(^|\/)[^.]*config\.[^/]+$/)) return "project configuration";
+  if (files.length === 2) return files.map((file) => path.posix.basename(file.path)).join(" and ");
+  return `${files.length} files`;
+}
+
+export async function suggestGitCommitMessage(project: ProjectDefinition): Promise<string> {
+  const repository = repositoryPath(project);
+  const output = await git(repository, ["diff", "--cached", "--name-status", "-M"]);
+  const files: GitInfoFile[] = output.split(/\r?\n/).filter(Boolean).map((line) => {
+    const [rawStatus = "M", firstPath = "", secondPath] = line.split("\t");
+    return {
+      path: secondPath || firstPath,
+      originalPath: secondPath ? firstPath : null,
+      indexStatus: rawStatus[0] || "M",
+      worktreeStatus: "."
+    };
+  });
+  if (!files.length) throw new Error("Merke zuerst mindestens eine Datei vor.");
+  if (files.length === 1) {
+    const file = files[0];
+    if (file.indexStatus === "R" && file.originalPath) {
+      return `Rename ${path.posix.basename(file.originalPath)} to ${path.posix.basename(file.path)}`.slice(0, 200);
+    }
+    const verb = file.indexStatus === "A" ? "Add" : file.indexStatus === "D" ? "Remove" : "Update";
+    return `${verb} ${commitTarget(files) === "documentation" ? "documentation" : path.posix.basename(file.path)}`;
+  }
+  const statuses = new Set(files.map((file) => file.indexStatus));
+  const verb = statuses.size === 1 && statuses.has("A") ? "Add" : statuses.size === 1 && statuses.has("D") ? "Remove" : "Update";
+  return `${verb} ${commitTarget(files)}`.slice(0, 200);
+}
+
 export async function runGitAction(project: ProjectDefinition, action: GitAction, payload: GitActionPayload): Promise<string> {
   const repository = repositoryPath(project);
   const info = project.git!;

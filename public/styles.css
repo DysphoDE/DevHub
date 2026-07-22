@@ -43,7 +43,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .sidebar::after { content: ""; position: absolute; left: -110px; bottom: 10%; width: 220px; height: 220px; border: 1px solid rgba(49,189,167,.12); border-radius: 50%; box-shadow: 0 0 0 30px rgba(49,189,167,.025), 0 0 0 60px rgba(49,189,167,.016); pointer-events: none; }
 .sidebar-top { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; }
 .brand { display: flex; align-items: center; gap: 12px; color: white; text-decoration: none; }
-.brand-mark { width: 39px; height: 39px; display: grid; grid-template-columns: repeat(3, 1fr); align-items: end; gap: 3px; padding: 9px; background: var(--signal); border-radius: 11px 4px 11px 11px; box-shadow: 0 8px 22px rgba(49,91,245,.28); }
+.brand-mark { width: 39px; height: 39px; display: grid; grid-template-columns: repeat(3, 1fr); align-items: end; gap: 3px; padding: 9px; background: var(--runtime); border-radius: 11px 4px 11px 11px; box-shadow: 0 8px 22px rgba(49,189,167,.28); }
 .brand-mark i { display: block; background: white; border-radius: 2px; }
 .brand-mark i:nth-child(1) { height: 48%; opacity: .7; }.brand-mark i:nth-child(2) { height: 100%; }.brand-mark i:nth-child(3) { height: 70%; opacity: .85; }
 .brand-copy strong { display: block; font: 680 20px/1 var(--display); letter-spacing: .075em; }
@@ -789,6 +789,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .git-file-action.unstage { color: #74613c; background: #fffaf0; border-color: #eadbbb; }
 .git-file-action.unstage:hover:not(:disabled) { color: #695329; background: #fff2d8; border-color: #dfc58e; box-shadow: 0 5px 12px rgba(160,115,40,.12); }
 .git-page-detail .git-file-action,.project-dialog .git-file-action { font-size: var(--type-caption); }
+
+/* Suggested commit messages */
+.commit-message-field { position: relative; }
+.commit-message-field input { padding-right: 43px; transition: border-color .16s ease,box-shadow .16s ease,background .16s ease; }
+.commit-suggest-button { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; display: grid; place-items: center; padding: 0; color: #315bf5; background: #eef2ff; border: 1px solid #d4dcff; border-radius: 7px; cursor: pointer; font-size: 11px; transition: color .14s ease,background .14s ease,border-color .14s ease,transform .14s ease; }
+.commit-suggest-button:hover:not(:disabled) { color: white; background: var(--signal); border-color: var(--signal); transform: translateY(-1px); }
+.commit-suggest-button:focus-visible { outline: 3px solid rgba(49,91,245,.22); outline-offset: 2px; }
+.commit-suggest-button:disabled { color: #a5aeb7; background: #f3f5f6; border-color: #e0e5e8; cursor: default; }
+.commit-composer.suggested input { background: #fbfcff; border-color: #bdcafa; box-shadow: inset 3px 0 #315bf5; }
+.commit-composer-note { min-height: 14px; display: flex; align-items: center; gap: 6px; line-height: 1.35; }
+.commit-composer.suggested .commit-composer-note,.commit-composer.suggested .commit-suggestion-status { color: #4966b5; }
+.commit-composer-note i { color: #315bf5; font-size: 10px; }
 
 .git-discard-dialog { width: min(560px,calc(100vw - 28px)); padding: 0; color: var(--text); background: white; border: 1px solid #d7c5c5; border-radius: 15px 5px 15px 15px; box-shadow: 0 30px 100px rgba(40,16,20,.35); overflow: hidden; }
 .git-discard-dialog::backdrop { background: rgba(12,19,28,.56); backdrop-filter: blur(3px); }

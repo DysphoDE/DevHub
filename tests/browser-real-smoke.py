@@ -94,6 +94,7 @@ with sync_playwright() as playwright:
     assert float(page.locator(".git-file-path").first.evaluate("element => parseFloat(getComputedStyle(element).fontSize)")) >= 10
     assert float(page.locator(".diff-line").first.evaluate("element => parseFloat(getComputedStyle(element).fontSize)")) >= 11
     assert float(page.locator(".commit-composer label").evaluate("element => parseFloat(getComputedStyle(element).fontSize)")) >= 11
+    assert page.locator("#project-dialog [data-git-suggest-message]").is_visible()
     page.screenshot(path=str(result_dir / "project-drawer-real.png"), full_page=False)
     page.locator("[data-close-project]").click()
 
@@ -104,6 +105,12 @@ with sync_playwright() as playwright:
     assert page.locator(".git-repository-item.active").count() == 1
     assert page.locator(".git-selected-header").is_visible()
     assert page.locator(".git-page-detail .git-files-panel").is_visible()
+    suggestion_button = page.locator(".git-page-detail [data-git-suggest-message]")
+    assert suggestion_button.is_visible()
+    if suggestion_button.is_enabled():
+        page.locator(".git-page-detail [data-commit-message]").wait_for()
+        page.wait_for_function("document.querySelector('.git-page-detail [data-commit-message]').value.trim().length >= 3")
+        assert "Automatisch vorgeschlagen" in page.locator(".git-page-detail .commit-composer-note").inner_text()
     git_rows = page.locator(".git-page-detail .git-file-row")
     git_rows.first.click()
     git_rows.nth(1).click(modifiers=["Control"])
