@@ -1,16 +1,24 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ProjectDefinition } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export type GitAction = "refresh" | "stage" | "unstage" | "stage-files" | "unstage-files" | "discard-files" | "stage-all" | "unstage-all" | "commit" | "fetch" | "pull" | "push";
+export type GitAction = "refresh" | "stage" | "unstage" | "stage-files" | "unstage-files" | "discard-files" | "stage-all" | "unstage-all" | "commit" | "fetch" | "pull" | "push" | "checkout" | "create-branch" | "undo-commit";
 
 export interface GitActionPayload {
   file?: unknown;
   files?: unknown;
   message?: unknown;
+  branch?: unknown;
+}
+
+export interface GitBranchInfo {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+  lastCommitDate: string | null;
 }
 
 export interface GitDiffSection {
@@ -78,6 +86,8 @@ function friendlyGitError(error: unknown): Error {
   if (/non-fast-forward|fetch first|rejected/i.test(text)) return new Error("Der Push wurde abgelehnt. Hole zuerst die neueren Remote-Commits im Terminal.");
   if (/would be overwritten by merge|please commit your changes or stash them/i.test(text)) return new Error("Lokale Änderungen verhindern den Pull. Committe oder sichere sie zuerst.");
   if (/not possible to fast-forward|divergent branches/i.test(text)) return new Error("Der Branch kann nicht automatisch vorgespult werden. Löse die Abweichung im Terminal.");
+  if (/would be overwritten by (checkout|switch)/i.test(text)) return new Error("Lokale Änderungen stehen dem Branch-Wechsel im Weg. Committe oder verwirf sie zuerst.");
+  if (/branch named '.+' already exists/i.test(text)) return new Error("Ein Branch mit diesem Namen existiert bereits.");
   return new Error(text.split(/\r?\n/).filter(Boolean).slice(-2).join(" ") || "Git-Aktion fehlgeschlagen.");
 }
 
@@ -110,6 +120,73 @@ async function gitDiff(repository: string, args: string[], allowDifferenceExit =
     }
     throw friendlyGitError(error);
   }
+}
+
+function requestedBranchName(value: unknown): string {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) throw new Error("Ein Branch-Name ist erforderlich.");
+  if (name.length > 100) throw new Error("Der Branch-Name darf höchstens 100 Zeichen lang sein.");
+  if (/^[-/.]|[/.]$|\.lock$|\.\.|@\{|\/\/|[\s~^:?*\[\\\x00-\x1f\x7f]/.test(name)) {
+    throw new Error("Der Branch-Name enthält ungültige Zeichen.");
+  }
+  return name;
+}
+
+export async function readGitBranches(project: ProjectDefinition): Promise<GitBranchInfo[]> {
+  const repository = repositoryPath(project);
+  const output = await git(repository, [
+    "for-each-ref", "refs/heads", "--sort=-committerdate",
+    "--format=%(refname:short)%1f%(HEAD)%1f%(upstream:short)%1f%(committerdate:iso-strict)"
+  ]);
+  return output.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+    const [name, head, upstream, date] = line.split("\x1f");
+    return name ? [{ name, current: head === "*", upstream: upstream || null, lastCommitDate: date || null }] : [];
+  });
+}
+
+// Untracked Dateien landen unter Windows im Papierkorb statt endgültig gelöscht zu werden (git clean).
+async function moveUntrackedToRecycleBin(repository: string, relativePaths: string[]): Promise<string> {
+  if (!relativePaths.length) return "";
+  const absolutePaths = relativePaths.map((relative) => {
+    const resolved = path.resolve(repository, relative);
+    if (resolved !== repository && !resolved.startsWith(repository + path.sep)) {
+      throw new Error("Eine zu verwerfende Datei liegt außerhalb des Repositorys.");
+    }
+    return resolved;
+  });
+  if (process.platform !== "win32") {
+    await git(repository, ["clean", "-f", "-d", "--", ...relativePaths]);
+    return "";
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName Microsoft.VisualBasic",
+    "$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)",
+    "$paths = $reader.ReadToEnd() -split \"`n\"",
+    "foreach ($p in $paths) {",
+    "  $p = $p.Trim()",
+    "  if ($p.Length -eq 0) { continue }",
+    "  if (Test-Path -LiteralPath $p -PathType Container) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }",
+    "  elseif (Test-Path -LiteralPath $p) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }",
+    "}"
+  ].join("\n");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      windowsHide: true,
+      stdio: ["pipe", "ignore", "pipe"]
+    });
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 60_000);
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`Neue Dateien konnten nicht in den Papierkorb verschoben werden. ${stderr.trim().split(/\r?\n/)[0] || ""}`.trim()));
+    });
+    child.stdin.end(absolutePaths.join("\n"), "utf8");
+  });
+  return " Neue Dateien wurden in den Papierkorb verschoben.";
 }
 
 function limitedPatch(patch: string): { patch: string; truncated: boolean } {
@@ -276,8 +353,8 @@ export async function runGitAction(project: ProjectDefinition, action: GitAction
       }
     }
     if (restorePaths.length) await git(repository, ["restore", "--source=HEAD", "--worktree", "--", ...new Set(restorePaths)]);
-    if (cleanPaths.length) await git(repository, ["clean", "-f", "-d", "--", ...new Set(cleanPaths)]);
-    return `${files.length} ${files.length === 1 ? "Änderung wurde" : "Änderungen wurden"} verworfen.`;
+    const recycleNote = await moveUntrackedToRecycleBin(repository, [...new Set(cleanPaths)]);
+    return `${files.length} ${files.length === 1 ? "Änderung wurde" : "Änderungen wurden"} verworfen.${recycleNote}`;
   }
   if (action === "stage-all") {
     await git(repository, ["add", "-A"]);
@@ -307,6 +384,38 @@ export async function runGitAction(project: ProjectDefinition, action: GitAction
     if (!info.upstream) throw new Error("Für diesen Branch ist noch kein Upstream eingerichtet.");
     await git(repository, ["pull", "--ff-only"], 60_000);
     return "Remote-Commits wurden übernommen.";
+  }
+  if (action === "checkout") {
+    const branch = requestedBranchName(payload.branch);
+    if (branch === info.branch) return `Der Branch „${branch}“ ist bereits aktiv.`;
+    try {
+      await git(repository, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+    } catch {
+      throw new Error(`Der Branch „${branch}“ existiert lokal nicht.`);
+    }
+    await git(repository, ["switch", branch], 30_000);
+    return `Branch „${branch}“ ist jetzt aktiv.`;
+  }
+  if (action === "create-branch") {
+    const branch = requestedBranchName(payload.branch);
+    try {
+      await git(repository, ["check-ref-format", "--branch", branch]);
+    } catch {
+      throw new Error("Der Branch-Name ist ungültig.");
+    }
+    await git(repository, ["switch", "-c", branch], 30_000);
+    return `Branch „${branch}“ wurde erstellt und ist jetzt aktiv.`;
+  }
+  if (action === "undo-commit") {
+    if (!info.lastCommit) throw new Error("Es gibt keinen Commit, der zurückgenommen werden könnte.");
+    if (!info.branch) throw new Error("Im detached-HEAD-Zustand kann kein Commit zurückgenommen werden.");
+    if (info.upstream && info.ahead === 0) throw new Error("Der letzte Commit wurde bereits zum Remote übertragen und kann lokal nicht mehr zurückgenommen werden.");
+    const revision = await git(repository, ["rev-list", "--parents", "-n", "1", "HEAD"]);
+    const parents = revision.split(/\s+/).filter(Boolean).slice(1);
+    if (parents.length > 1) throw new Error("Merge-Commits können hier nicht zurückgenommen werden. Nutze dafür das Terminal.");
+    if (parents.length === 0) await git(repository, ["update-ref", "-d", "HEAD"]);
+    else await git(repository, ["reset", "--soft", "HEAD^"]);
+    return `Commit „${info.lastCommit.subject}“ wurde zurückgenommen. Die Änderungen sind wieder vorgemerkt.`;
   }
   if (action === "push") {
     if (!info.branch) throw new Error("Ein Push ist im detached-HEAD-Zustand nicht verfügbar.");

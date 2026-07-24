@@ -35,6 +35,9 @@ const state = {
   gitCommitDetails: new Map(),
   gitCommitLoading: null,
   pendingGitDiscard: null,
+  gitBranches: new Map(),
+  gitBranchLoading: new Set(),
+  gitBranchMenu: null,
   activeLogId: null
 };
 
@@ -609,7 +612,16 @@ function gitFileRow(project, file) {
 
 function gitLastCommit(project) {
   const commit = project.git?.lastCommit;
-  return commit ? `<div class="last-commit"><span class="commit-hash">${escapeHtml(commit.hash)}</span><div><strong>${escapeHtml(commit.subject)}</strong><small>${escapeHtml(commit.author)} · ${dateTime(commit.date)}</small></div></div>` : '<p class="git-empty-note">Noch kein Commit vorhanden.</p>';
+  if (!commit) return '<p class="git-empty-note">Noch kein Commit vorhanden.</p>';
+  const git = project.git;
+  const pending = state.pendingGitAction?.startsWith(`${project.id}:`);
+  const pushed = Boolean(git.upstream) && git.ahead === 0;
+  const canUndo = Boolean(git.branch) && !pushed;
+  const undoTitle = pushed ? "Der Commit wurde bereits gepusht und kann nicht zurückgenommen werden"
+    : !git.branch ? "Im detached-HEAD-Zustand nicht verfügbar"
+    : "Commit zurücknehmen – die Änderungen bleiben vorgemerkt";
+  return `<div class="last-commit"><span class="commit-hash">${escapeHtml(commit.hash)}</span><div><strong>${escapeHtml(commit.subject)}</strong><small>${escapeHtml(commit.author)} · ${dateTime(commit.date)}</small></div>
+    <button class="commit-undo-button" data-git-action="undo-commit" data-project-id="${project.id}" ${pending || !canUndo ? "disabled" : ""} title="${escapeHtml(undoTitle)}"><i class="fa-solid fa-rotate-left" aria-hidden="true"></i>Commit zurücknehmen</button></div>`;
 }
 
 function gitRemotePanel(project) {
@@ -695,11 +707,41 @@ function gitChangesView(project, surface) {
   </div>`;
 }
 
+function gitBranchSwitcher(project) {
+  const git = project.git;
+  const open = state.gitBranchMenu === project.id;
+  const pending = state.pendingGitAction?.startsWith(`${project.id}:`);
+  const entry = state.gitBranches.get(project.id);
+  const loading = state.gitBranchLoading.has(project.id);
+  let menu = "";
+  if (open) {
+    const list = entry?.error
+      ? `<p class="git-branch-menu-note error">${escapeHtml(entry.error)}</p>`
+      : loading && !entry?.branches ? '<p class="git-branch-menu-note"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Branches werden geladen …</p>'
+        : (entry?.branches || []).map((branch) => `<button class="git-branch-option ${branch.current ? "current" : ""}" data-git-checkout="${escapeHtml(branch.name)}" data-project-id="${project.id}" ${pending || branch.current ? "disabled" : ""} title="${branch.current ? "Aktueller Branch" : `Zu „${escapeHtml(branch.name)}“ wechseln`}">
+            <i class="fa-solid ${branch.current ? "fa-check" : "fa-code-branch"}" aria-hidden="true"></i><span>${escapeHtml(branch.name)}</span>${branch.upstream ? "<small>remote</small>" : ""}
+          </button>`).join("") || '<p class="git-branch-menu-note">Noch keine lokalen Branches vorhanden.</p>';
+    menu = `<div class="git-branch-menu">
+      <div class="git-branch-menu-list">${list}</div>
+      <form class="git-branch-create" data-git-create-branch="${project.id}">
+        <input name="branch" placeholder="neuer-branch" maxlength="100" autocomplete="off" spellcheck="false" aria-label="Name für neuen Branch" ${pending ? "disabled" : ""}>
+        <button type="submit" ${pending ? "disabled" : ""}>Erstellen</button>
+      </form>
+    </div>`;
+  }
+  return `<div class="git-status-branch ${open ? "open" : ""}">
+    <span class="git-node"></span>
+    <button type="button" class="git-branch-toggle" data-git-branch-menu="${project.id}" aria-expanded="${open}" aria-haspopup="true" title="Branch wechseln oder erstellen">
+      <code>${escapeHtml(git.branch || "detached HEAD")}</code><i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+    </button>
+    ${menu}
+  </div>`;
+}
+
 function gitDetail(project, surface = "drawer") {
   const git = project.git;
   if (!git) return `<section class="detail-panel git-detail empty-git"><div class="detail-section-head"><div><p class="eyebrow">Versionskontrolle</p><h3>Kein Git-Repository</h3></div></div><p>In diesem Projektordner wurde kein Repository erkannt. Du kannst direkt ein Terminal öffnen, um eines anzulegen.</p><button class="detail-secondary-action" data-project-action="terminal" data-project-id="${project.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}>&gt;_ Terminal öffnen</button></section>`;
   const changes = git.changedFiles ?? git.files.length;
-  const branch = git.branch || "detached HEAD";
   const repoHint = git.repositoryRoot === "." ? "Projektstamm" : git.repositoryRoot;
   return `<section class="detail-panel git-detail ${surface === "page" ? "git-page-detail" : ""}">
     <div class="git-detail-toolbar">
@@ -710,7 +752,7 @@ function gitDetail(project, surface = "drawer") {
       <span>Git · ${escapeHtml(repoHint)}</span>
     </div>
     <div class="git-status-strip" aria-label="Git-Status">
-      <div class="git-status-branch"><span class="git-node"></span><code>${escapeHtml(branch)}</code></div>
+      ${gitBranchSwitcher(project)}
       <span class="git-health ${git.dirty ? "dirty" : "clean"}"><i></i>${git.dirty ? `${changes} offen` : "sauber"}</span>
       <div class="git-status-changes"><span><b>${git.staged}</b> vorgemerkt</span><span><b>${git.unstaged}</b> lokal</span><span><b>${git.untracked}</b> neu</span></div>
       <div class="git-status-sync"><small>${escapeHtml(git.upstream || git.remoteName || "kein Remote")}</small><span>↑ ${git.ahead}</span><span>↓ ${git.behind}</span></div>
@@ -784,7 +826,7 @@ function renderGitPage() {
   const filterLabels = { all: "Alle", changed: "Geändert", staged: "Vorgemerkt", sync: "Synchronisieren", conflicts: "Konflikte", clean: "Sauber" };
   const filters = Object.entries(filterLabels).map(([filter, label]) => `<button class="${state.gitFilter === filter ? "active" : ""}" data-git-filter="${filter}" aria-pressed="${state.gitFilter === filter}">${label}</button>`).join("");
 
-  elements.gitPage.innerHTML = `<header class="git-command-deck">
+  const gitPageHtml = `<header class="git-command-deck">
     <div class="git-command-title">
       <span class="git-command-mark" aria-hidden="true"><i></i><i></i><i></i></span>
       <div><p class="eyebrow">Repository control</p><h1>Git-Zentrale</h1><span>${repositories.length} Repositories · ein Arbeitsstand</span></div>
@@ -822,6 +864,10 @@ function renderGitPage() {
       </header>${gitDetail(selected, "page")}` : `<div class="git-workbench-empty"><span><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><strong>Kein Repository ausgewählt</strong><p>Wähle links ein Repository oder passe den Filter an.</p></div>`}
     </section>
   </div>` : `<section class="git-page-empty"><span><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><h2>Noch keine Repositories</h2><p>DevHub zeigt hier jedes Git-Repository, das im gewählten Workspace erkannt wird.</p><button data-rescan-workspace>Workspace neu einlesen</button></section>`}`;
+  if (elements.gitPage.__devhubHtml !== gitPageHtml) {
+    elements.gitPage.__devhubHtml = gitPageHtml;
+    elements.gitPage.innerHTML = gitPageHtml;
+  }
 }
 
 function renderWorkspaceNavigation() {
@@ -903,7 +949,7 @@ function renderProjectDialog() {
   const editorName = state.capabilities?.editor.name || "Editor";
   const workbench = Boolean(project.git);
   elements.projectDialog.classList.toggle("workbench", workbench);
-  elements.projectDialogContent.innerHTML = `<article class="project-detail ${className} ${running ? "running" : ""}">
+  const dialogHtml = `<article class="project-detail ${className} ${running ? "running" : ""}">
     <header class="project-detail-head">
       <div class="detail-accent"></div>
       <div class="detail-title-row">
@@ -936,6 +982,10 @@ function renderProjectDialog() {
       </section>
     </div>
   </article>`;
+  if (elements.projectDialogContent.__devhubHtml !== dialogHtml) {
+    elements.projectDialogContent.__devhubHtml = dialogHtml;
+    elements.projectDialogContent.innerHTML = dialogHtml;
+  }
 }
 
 function openProjectDetails(projectId) {
@@ -1028,12 +1078,56 @@ function renderServiceDock() {
   renderRuntimeTopology();
 }
 
+const cardTemplate = document.createElement("template");
+
+function syncProjectGrid(projects) {
+  const renderer = state.view === "list" ? projectListItem : projectCard;
+  const grid = elements.grid;
+  const existing = new Map();
+  for (const child of grid.children) {
+    if (child.dataset.project) existing.set(child.dataset.project, child);
+  }
+  const desired = [];
+  for (const project of projects) {
+    const html = renderer(project);
+    const current = existing.get(project.id);
+    existing.delete(project.id);
+    if (current && current.__devhubHtml === html) {
+      desired.push(current);
+      continue;
+    }
+    cardTemplate.innerHTML = html;
+    const fresh = cardTemplate.content.firstElementChild;
+    fresh.remove();
+    fresh.__devhubHtml = html;
+    if (current) {
+      fresh.classList.add("card-refresh");
+      current.replaceWith(fresh);
+    }
+    desired.push(fresh);
+  }
+  for (const stale of existing.values()) stale.remove();
+  let cursor = grid.firstElementChild;
+  for (const node of desired) {
+    if (node === cursor) {
+      cursor = cursor.nextElementSibling;
+      continue;
+    }
+    if (node.isConnected) node.classList.add("card-refresh");
+    grid.insertBefore(node, cursor);
+  }
+}
+
 function render(preserveFocus = true) {
-  const focusKey = preserveFocus ? document.activeElement?.dataset?.focusKey : null;
+  const activeElement = document.activeElement;
+  const focusKey = preserveFocus ? activeElement?.dataset?.focusKey : null;
+  const focusSelection = focusKey && typeof activeElement.selectionStart === "number"
+    ? [activeElement.selectionStart, activeElement.selectionEnd, activeElement.selectionDirection || "none"]
+    : null;
   const projects = getVisibleProjects();
   elements.resultCount.textContent = projects.length;
   elements.grid.classList.toggle("list-view", state.view === "list");
-  elements.grid.innerHTML = projects.map(state.view === "list" ? projectListItem : projectCard).join("");
+  syncProjectGrid(projects);
   elements.grid.hidden = projects.length === 0;
   elements.empty.hidden = projects.length !== 0;
   const noWorkspaceProjects = state.projects.length === 0;
@@ -1050,7 +1144,15 @@ function render(preserveFocus = true) {
   document.querySelectorAll("[data-view]").forEach((button) => { button.classList.toggle("active", button.dataset.view === state.view); button.setAttribute("aria-pressed", String(button.dataset.view === state.view)); });
   document.querySelectorAll("[data-mobile-filter]").forEach((button) => { const active = button.dataset.mobileFilter === state.filter; button.classList.toggle("active", active); button.setAttribute("aria-pressed", String(active)); });
   if (elements.projectDialog.open && state.activeProjectId) renderProjectDialog();
-  if (focusKey) document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+  if (focusKey) {
+    const target = document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`);
+    if (target) {
+      target.focus({ preventScroll: true });
+      if (focusSelection && typeof target.setSelectionRange === "function") {
+        try { target.setSelectionRange(focusSelection[0], focusSelection[1], focusSelection[2]); } catch { /* Elementtyp ohne Auswahl */ }
+      }
+    }
+  }
 }
 
 function toast(message, type = "success") {
@@ -1213,6 +1315,26 @@ function openGitDiscardDialog(projectId, files) {
   elements.discardDialog.showModal();
 }
 
+async function loadGitBranches(projectId) {
+  if (state.gitBranchLoading.has(projectId)) return;
+  state.gitBranchLoading.add(projectId);
+  renderGitSurfaces();
+  try {
+    state.gitBranches.set(projectId, await api(`/api/projects/${projectId}/git/branches`));
+  } catch (error) {
+    state.gitBranches.set(projectId, { error: error.message });
+  } finally {
+    state.gitBranchLoading.delete(projectId);
+    renderGitSurfaces();
+  }
+}
+
+function toggleGitBranchMenu(projectId) {
+  state.gitBranchMenu = state.gitBranchMenu === projectId ? null : projectId;
+  renderGitSurfaces();
+  if (state.gitBranchMenu) loadGitBranches(projectId);
+}
+
 function runGitSelectionAction(projectId, action) {
   const files = selectedGitFilePaths(projectId);
   if (!files.length) return;
@@ -1223,6 +1345,7 @@ function runGitSelectionAction(projectId, action) {
 async function runGitProjectAction(projectId, action, payload = {}) {
   const projectIndex = state.projects.findIndex((item) => item.id === projectId);
   if (projectIndex < 0 || state.pendingGitAction) return false;
+  const undoSubject = action === "undo-commit" ? state.projects[projectIndex].git?.lastCommit?.subject : null;
   state.pendingGitAction = `${projectId}:${action}`;
   if (elements.projectDialog.open) renderProjectDialog();
   if (state.page === "git") renderGitPage();
@@ -1243,6 +1366,16 @@ async function runGitProjectAction(projectId, action, payload = {}) {
       state.gitSuggestedMessages.delete(projectId);
     }
     if (action === "discard-files") state.selectedGitFiles.delete(projectId);
+    if (action === "undo-commit" && undoSubject) {
+      state.gitCommitMessages.set(projectId, undoSubject);
+      state.gitSuggestedMessages.delete(projectId);
+    }
+    if (["checkout", "create-branch", "undo-commit"].includes(action)) {
+      state.gitBranches.delete(projectId);
+      state.activeGitCommits.delete(projectId);
+      state.selectedGitFiles.delete(projectId);
+      state.activeGitFiles.delete(projectId);
+    }
     for (const key of state.gitDiffs.keys()) if (key.startsWith(`${projectId}\u0000`)) state.gitDiffs.delete(key);
     state.gitHistories.delete(projectId);
     toast(data.message);
@@ -1283,7 +1416,12 @@ function connectEvents() {
   const events = new EventSource("/api/events");
   events.addEventListener("runtime", (event) => { const data = JSON.parse(event.data); updateRuntime(data.launcherId, data.runtime); });
   events.addEventListener("log", (event) => { const data = JSON.parse(event.data); if (state.activeLogId === data.launcherId) appendLog(data.entry); });
-  events.addEventListener("projects", (event) => { state.projects = JSON.parse(event.data).projects; render(false); });
+  events.addEventListener("projects", (event) => {
+    state.projects = JSON.parse(event.data).projects;
+    render();
+    loadActiveGitSurface(true);
+    elements.scanStatus.textContent = `${state.projects.length} Projekte · automatisch aktualisiert`;
+  });
   events.addEventListener("workspace", (event) => { const data = JSON.parse(event.data); setWorkspaceRoot(data.root); state.projects = data.projects; render(false); });
   events.onopen = () => { elements.scanStatus.textContent = `${state.projects.length} Projekte · live verbunden`; };
   events.onerror = () => { elements.scanStatus.textContent = "Live-Verbindung wird wiederhergestellt …"; };
@@ -1345,6 +1483,18 @@ function copyToClipboard(value, successMessage) {
 }
 
 function handleProjectInteraction(event) {
+  if (state.gitBranchMenu && !event.target.closest(".git-status-branch")) {
+    state.gitBranchMenu = null;
+    renderGitSurfaces();
+  }
+  const branchToggle = event.target.closest("[data-git-branch-menu]");
+  if (branchToggle) { toggleGitBranchMenu(branchToggle.dataset.gitBranchMenu); return; }
+  const checkoutOption = event.target.closest("[data-git-checkout]");
+  if (checkoutOption) {
+    state.gitBranchMenu = null;
+    runGitProjectAction(checkoutOption.dataset.projectId, "checkout", { branch: checkoutOption.dataset.gitCheckout });
+    return;
+  }
   const repository = event.target.closest("[data-git-repository]");
   if (repository) {
     state.activeGitProjectId = repository.dataset.gitRepository;
@@ -1476,10 +1626,22 @@ function handleGitKeyboard(event) {
   }
 }
 
+function handleGitBranchCreate(event) {
+  const form = event.target.closest("[data-git-create-branch]");
+  if (!form) return;
+  event.preventDefault();
+  const name = (form.querySelector("input[name=branch]")?.value || "").trim();
+  if (!name) return;
+  state.gitBranchMenu = null;
+  runGitProjectAction(form.dataset.gitCreateBranch, "create-branch", { branch: name });
+}
+
 elements.projectDialogContent.addEventListener("input", handleGitComposerInput);
 elements.projectDialogContent.addEventListener("keydown", handleGitKeyboard);
+elements.projectDialogContent.addEventListener("submit", handleGitBranchCreate);
 elements.gitPage.addEventListener("input", handleGitComposerInput);
 elements.gitPage.addEventListener("keydown", handleGitKeyboard);
+elements.gitPage.addEventListener("submit", handleGitBranchCreate);
 elements.projectDialog.addEventListener("click", (event) => { if (event.target === elements.projectDialog) elements.projectDialog.close(); });
 elements.projectDialog.addEventListener("close", () => { state.activeProjectId = null; });
 

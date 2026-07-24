@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, watch, type FSWatcher } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, getAppDirectory, saveScanRoot } from "./config.js";
-import { readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
+import { readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
 import { getLaragonStatus, runLaragonAction, type LaragonAction } from "./laragon.js";
 import { ProcessManager } from "./process-manager.js";
 import { readGitInfo, scanWorkspace } from "./scanner.js";
@@ -27,6 +27,16 @@ const eventClients = new Set<ServerResponse>();
 function isLoopback(address?: string): boolean {
   if (!address) return false;
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+// Schutz vor DNS-Rebinding: Anfragen müssen mit einem bekannten Hostnamen adressiert sein,
+// sonst könnte eine fremde Domain, die auf 127.0.0.1 auflöst, die API aus dem Browser lesen.
+const allowedHostNames = new Set(["localhost", "127.0.0.1", "::1", config.host.toLowerCase(), config.publicHost.toLowerCase()]);
+
+function isAllowedHost(hostHeader?: string): boolean {
+  if (!hostHeader) return false;
+  const withoutPort = hostHeader.toLowerCase().replace(/:\d+$/, "");
+  return allowedHostNames.has(withoutPort) || allowedHostNames.has(withoutPort.replace(/^\[|\]$/g, ""));
 }
 
 function sendJson(response: ServerResponse, status: number, data: unknown): void {
@@ -78,19 +88,90 @@ function broadcast(type: string, payload: unknown): void {
 processManager.onChange((launcherId, runtime) => broadcast("runtime", { launcherId, runtime }));
 processManager.onLog((launcherId, entry) => broadcast("log", { launcherId, entry }));
 
+let lastProjectsPayload = "";
+
+function broadcastProjects(): void {
+  const payload = JSON.stringify({ projects: publicProjects() });
+  if (payload === lastProjectsPayload) return;
+  lastProjectsPayload = payload;
+  const message = `event: projects\ndata: ${payload}\n\n`;
+  for (const client of eventClients) client.write(message);
+}
+
 async function refreshProjects(): Promise<void> {
   if (scanPromise) return scanPromise;
   scanning = true;
   scanPromise = (async () => {
     try {
       projects = await scanWorkspace(config, getAppDirectory());
-      broadcast("projects", { projects: publicProjects() });
+      broadcastProjects();
     } finally {
       scanning = false;
       scanPromise = null;
+      if (rescanQueued) {
+        rescanQueued = false;
+        scheduleWorkspaceRefresh();
+      }
     }
   })();
   return scanPromise;
+}
+
+let workspaceWatcher: FSWatcher | null = null;
+let watchDebounce: NodeJS.Timeout | null = null;
+let rescanQueued = false;
+const watcherIgnored = new Set(config.ignore.map((name) => name.toLowerCase()));
+const gitRelevantEntry = /^(HEAD|ORIG_HEAD|MERGE_HEAD|FETCH_HEAD|COMMIT_EDITMSG|packed-refs|index|refs)$/i;
+
+function isRelevantChange(relativePath: string | null): boolean {
+  if (!relativePath) return true;
+  const segments = relativePath.split(/[\\/]+/).filter(Boolean);
+  if (!segments.length) return true;
+  const leaf = segments[segments.length - 1];
+  if (leaf.endsWith(".lock") || leaf.endsWith(".tmp") || leaf.endsWith("~")) return false;
+  const gitIndex = segments.findIndex((segment) => segment.toLowerCase() === ".git");
+  if (gitIndex !== -1) {
+    const inner = segments[gitIndex + 1];
+    return inner === undefined || gitRelevantEntry.test(inner);
+  }
+  return !segments.some((segment) => watcherIgnored.has(segment.toLowerCase()));
+}
+
+let lastWorkspaceScanEnd = 0;
+
+function scheduleWorkspaceRefresh(): void {
+  if (scanPromise) {
+    rescanQueued = true;
+    return;
+  }
+  if (watchDebounce) return;
+  const delay = Math.max(1500, lastWorkspaceScanEnd + 5000 - Date.now());
+  watchDebounce = setTimeout(() => {
+    watchDebounce = null;
+    refreshProjects().catch((error) => {
+      console.warn(`Automatischer Workspace-Scan fehlgeschlagen: ${error instanceof Error ? error.message : error}`);
+    }).finally(() => {
+      lastWorkspaceScanEnd = Date.now();
+    });
+  }, delay);
+  watchDebounce.unref?.();
+}
+
+function startWorkspaceWatcher(): void {
+  workspaceWatcher?.close();
+  workspaceWatcher = null;
+  try {
+    workspaceWatcher = watch(config.scanRoot, { recursive: true, persistent: false }, (_eventType, filename) => {
+      if (isRelevantChange(typeof filename === "string" ? filename : null)) scheduleWorkspaceRefresh();
+    });
+    workspaceWatcher.on("error", (error) => {
+      console.warn(`Workspace-Überwachung unterbrochen: ${error instanceof Error ? error.message : error}`);
+      workspaceWatcher?.close();
+      workspaceWatcher = null;
+    });
+  } catch (error) {
+    console.warn(`Workspace-Überwachung nicht verfügbar: ${error instanceof Error ? error.message : error}`);
+  }
 }
 
 function requireToken(request: IncomingMessage, response: ServerResponse): boolean {
@@ -159,6 +240,10 @@ const server = createServer(async (request, response) => {
     sendJson(response, 403, { error: "DevHub ist nur lokal erreichbar." });
     return;
   }
+  if (!isAllowedHost(request.headers.host)) {
+    sendJson(response, 403, { error: "Ungültiger Host-Header." });
+    return;
+  }
 
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   const pathname = decodeURIComponent(url.pathname);
@@ -204,7 +289,23 @@ const server = createServer(async (request, response) => {
       const mimeTypes: Record<string, string> = {
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"
       };
-      response.writeHead(200, { "Content-Type": mimeTypes[path.extname(project.thumbnailPath).toLowerCase()] ?? "application/octet-stream" });
+      const thumbnailStats = await stat(project.thumbnailPath).catch(() => null);
+      if (!thumbnailStats?.isFile()) {
+        sendJson(response, 404, { error: "Kein Vorschaubild vorhanden." });
+        return;
+      }
+      const lastModified = new Date(Math.floor(thumbnailStats.mtimeMs / 1000) * 1000).toUTCString();
+      const cacheHeaders = { "Cache-Control": "private, max-age=60", "Last-Modified": lastModified };
+      if (request.headers["if-modified-since"] === lastModified) {
+        response.writeHead(304, cacheHeaders);
+        response.end();
+        return;
+      }
+      response.writeHead(200, {
+        "Content-Type": mimeTypes[path.extname(project.thumbnailPath).toLowerCase()] ?? "application/octet-stream",
+        "Content-Length": thumbnailStats.size,
+        ...cacheHeaders
+      });
       createReadStream(project.thumbnailPath).pipe(response);
       return;
     }
@@ -250,6 +351,7 @@ const server = createServer(async (request, response) => {
       }
       await processManager.stopAll();
       await refreshProjects();
+      startWorkspaceWatcher();
       const publicPayload = { root, projects: publicProjects() };
       broadcast("workspace", publicPayload);
       sendJson(response, 200, publicPayload);
@@ -280,7 +382,18 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const gitActionMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(refresh|stage|unstage|stage-files|unstage-files|discard-files|stage-all|unstage-all|commit|fetch|pull|push)$/);
+    const gitBranchesMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/branches$/);
+    if (request.method === "GET" && gitBranchesMatch) {
+      const project = projects.find((candidate) => candidate.id === gitBranchesMatch[1]);
+      if (!project?.git) {
+        sendJson(response, 404, { error: "Git-Repository nicht gefunden. Bitte Projekte neu einlesen." });
+        return;
+      }
+      sendJson(response, 200, { branches: await readGitBranches(project) });
+      return;
+    }
+
+    const gitActionMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(refresh|stage|unstage|stage-files|unstage-files|discard-files|stage-all|unstage-all|commit|fetch|pull|push|checkout|create-branch|undo-commit)$/);
     if (request.method === "POST" && gitActionMatch) {
       if (!requireToken(request, response)) return;
       const project = projects.find((candidate) => candidate.id === gitActionMatch[1]);
@@ -289,9 +402,12 @@ const server = createServer(async (request, response) => {
         return;
       }
       const payload = await readJsonBody(request) as GitActionPayload;
+      // Destruktive Aktionen validieren gegen den Git-Status: vorher neu einlesen,
+      // damit kein veralteter Snapshot als Grundlage dient.
+      if (gitActionMatch[2] === "discard-files" || gitActionMatch[2] === "undo-commit") await refreshProjectGit(project);
       const message = await runGitAction(project, gitActionMatch[2] as GitAction, payload);
       await refreshProjectGit(project);
-      broadcast("projects", { projects: publicProjects() });
+      broadcastProjects();
       sendJson(response, 200, { message, project: publicProject(project) });
       return;
     }
@@ -369,6 +485,11 @@ const server = createServer(async (request, response) => {
 });
 
 await refreshProjects();
+startWorkspaceWatcher();
+setInterval(() => {
+  for (const client of eventClients) client.write(":heartbeat\n\n");
+  if (!workspaceWatcher) scheduleWorkspaceRefresh();
+}, 25_000).unref();
 server.listen(config.port, config.host, () => {
   console.log(`DevHub Node läuft auf http://${config.publicHost}:${config.port}`);
   console.log(`Lokale Bindung: http://${config.host}:${config.port}`);
@@ -377,6 +498,8 @@ server.listen(config.port, config.host, () => {
 
 async function shutdown(): Promise<void> {
   console.log("\nDevHub wird beendet …");
+  workspaceWatcher?.close();
+  if (watchDebounce) clearTimeout(watchDebounce);
   await processManager.stopAll();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();

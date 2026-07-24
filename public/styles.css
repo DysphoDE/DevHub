@@ -241,6 +241,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .toast-region { position: fixed; z-index: 30; right: 20px; bottom: 20px; display: grid; gap: 8px; }.toast { width: min(370px, calc(100vw - 40px)); padding: 13px 15px; color: white; background: var(--ink); border-left: 4px solid var(--runtime); border-radius: 7px; box-shadow: 0 12px 30px rgba(23,32,44,.24); font-size: 11px; animation: toast-in .24s ease; }.toast.error { border-left-color: var(--danger); }
 
 @keyframes spin { to { transform: rotate(360deg); } } @keyframes card-in { from { opacity: 0; transform: translateY(7px); } } @keyframes toast-in { from { opacity: 0; transform: translateY(7px); } }
+.project-card.card-refresh { animation: none; }
 
 @media (max-width: 1180px) {
   .service-dock { grid-template-columns: minmax(180px,.6fr) 1.6fr; }.dock-actions { grid-column: 1 / -1; position: absolute; right: 14px; bottom: 11px; }.service-dock { padding-bottom: 55px; }
@@ -509,6 +510,34 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .git-detail-toolbar { min-height: 37px; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 8px; }.git-detail-toolbar > span { color: #8a959e; font: 8px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
 .git-mode-tabs { display: flex; gap: 3px; padding: 3px; background: #e2e7ea; border-radius: 8px; }.git-mode-tabs button { min-height: 31px; display: flex; align-items: center; gap: 7px; padding: 0 10px; color: #667581; background: transparent; border: 0; border-radius: 6px; cursor: pointer; font-size: 9px; font-weight: 700; }.git-mode-tabs button:hover { color: #33414d; }.git-mode-tabs button.active { color: var(--signal); background: white; box-shadow: 0 2px 7px rgba(23,32,44,.09); }.git-mode-tabs button b { min-width: 19px; padding: 3px 5px; color: #7c8993; background: #edf0f2; border-radius: 20px; font: 650 7px/1 var(--mono); text-align: center; }.git-mode-tabs button.active b { color: var(--signal); background: var(--signal-soft); }
 .git-status-strip { min-width: 0; min-height: 46px; display: grid; grid-template-columns: minmax(130px,1fr) auto auto minmax(150px,auto); align-items: center; gap: 14px; padding: 0 13px 0 17px; color: #b6c2ce; background: #17212d; border-radius: 9px 3px 9px 9px; }.git-status-branch { min-width: 0; display: flex; align-items: center; gap: 9px; }.git-status-branch code { overflow: hidden; color: #e0e7ed; font: 10px/1 var(--mono); text-overflow: ellipsis; white-space: nowrap; }.git-status-strip .git-health { min-height: 24px; font-size: 8px; }.git-status-changes { display: flex; align-items: center; gap: 10px; padding: 0 13px; border-left: 1px solid #2a3745; border-right: 1px solid #2a3745; }.git-status-changes span { color: #778798; font-size: 8px; white-space: nowrap; }.git-status-changes b { color: #dbe3ea; font: 650 10px/1 var(--mono); }.git-status-sync { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }.git-status-sync small { max-width: 135px; overflow: hidden; margin-right: 3px; color: #657588; font: 8px/1 var(--mono); text-overflow: ellipsis; white-space: nowrap; }.git-status-sync span { padding: 4px 6px; color: #93a2b2; background: #222e3c; border-radius: 5px; font: 8px/1 var(--mono); }
+
+.git-status-branch { position: relative; }
+.git-branch-toggle { min-width: 0; min-height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 9px; background: #222e3c; border: 1px solid #2e3c4c; border-radius: 7px; cursor: pointer; }
+.git-branch-toggle code { overflow: hidden; color: #e0e7ed; font: 10px/1 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.git-branch-toggle > i { color: #7f8a95; font-size: 8px; }
+.git-branch-toggle:hover { border-color: #46586d; }
+.git-status-branch.open .git-branch-toggle { border-color: #46586d; }
+.git-branch-menu { position: absolute; z-index: 30; top: calc(100% + 7px); left: 0; width: min(300px, 76vw); background: white; border: 1px solid #cdd6dc; border-radius: 10px 3px 10px 10px; box-shadow: 0 18px 50px rgba(14,23,34,.28); overflow: hidden; }
+.git-branch-menu-list { max-height: 240px; overflow: auto; padding: 5px; }
+.git-branch-option { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 9px; color: #34414e; background: transparent; border: 0; border-radius: 6px; cursor: pointer; font: 650 10px/1 var(--mono); text-align: left; }
+.git-branch-option span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-branch-option small { flex: 0 0 auto; color: #8a959e; font-size: 7px; text-transform: uppercase; letter-spacing: .05em; }
+.git-branch-option i { width: 12px; flex: 0 0 auto; color: #9aa7b1; font-size: 9px; }
+.git-branch-option:hover:not(:disabled) { color: var(--signal); background: var(--signal-soft); }
+.git-branch-option.current { color: #197c6e; cursor: default; }
+.git-branch-option.current i { color: var(--runtime); }
+.git-branch-option:disabled:not(.current) { opacity: .5; cursor: wait; }
+.git-branch-menu-note { margin: 0; padding: 12px; color: #7d8992; font-size: 10px; }
+.git-branch-menu-note.error { color: #a34141; }
+.git-branch-create { display: flex; gap: 6px; margin: 0; padding: 8px; background: #f5f7f8; border-top: 1px solid #e2e7ea; }
+.git-branch-create input { flex: 1; min-width: 0; min-height: 30px; padding: 0 9px; border: 1px solid #d4dce0; border-radius: 6px; font: 10px/1.2 var(--mono); }
+.git-branch-create input:focus { outline: 2px solid rgba(49,91,245,.25); border-color: #c5cff5; }
+.git-branch-create button { min-height: 30px; flex: 0 0 auto; padding: 0 10px; color: white; background: var(--signal); border: 0; border-radius: 6px; cursor: pointer; font-size: 9px; font-weight: 700; }
+.git-branch-create button:hover { background: #2449d7; }
+.git-branch-create button:disabled { opacity: .5; cursor: wait; }
+.commit-undo-button { grid-column: 1 / -1; justify-self: start; min-height: 27px; display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; padding: 0 9px; color: #64727e; background: white; border: 1px solid #d7dee2; border-radius: 6px; cursor: pointer; font-size: 9px; font-weight: 650; }
+.commit-undo-button:hover:not(:disabled) { color: var(--signal); border-color: #c5cff5; }
+.commit-undo-button:disabled { opacity: .45; cursor: not-allowed; }
 
 .git-clean-layout { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(310px,.65fr); gap: 12px; margin-top: 10px; }.git-clean-summary { min-height: 210px; display: flex; align-items: center; justify-content: center; gap: 17px; padding: 28px; background: white; border: 1px solid #dfe5e8; border-radius: 10px 3px 10px 10px; }.git-clean-summary > span { width: 44px; height: 44px; flex: 0 0 auto; display: grid; place-items: center; color: #138472; background: var(--runtime-soft); border-radius: 13px 4px 13px 13px; }.git-clean-summary h4 { margin: 0; color: #34424e; font: 650 20px/1 var(--display); }.git-clean-summary p:not(.eyebrow) { max-width: 430px; margin: 7px 0 0; color: #7d8992; font-size: 10px; line-height: 1.5; }.git-clean-summary > button { min-height: 37px; flex: 0 0 auto; display: flex; align-items: center; gap: 7px; margin-left: 12px; padding: 0 12px; color: var(--signal); background: var(--signal-soft); border: 1px solid #d0d9fb; border-radius: 8px; cursor: pointer; font-size: 9px; font-weight: 700; }.git-clean-summary > button:hover { color: white; background: var(--signal); }.git-clean-side { min-width: 0; display: flex; flex-direction: column; gap: 13px; padding: 14px; background: #f7f9fa; border: 1px solid #dfe5e8; border-radius: 10px; }
 

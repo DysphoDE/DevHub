@@ -7,6 +7,7 @@ The server binds to your loopback interface by default. Project paths, Git state
 ## What it does
 
 - Discovers every direct child of a workspace folder as a project.
+- Watches the workspace and refreshes projects and Git state live over server-sent events—no manual reload, and unchanged cards are left untouched so the UI never flickers.
 - Detects common stacks such as Node.js, React, Vue, Next.js, PHP, Laravel, Symfony, Python, Docker, and static HTML.
 - Creates launch actions from `package.json` scripts, `start.bat`, `start.cmd`, `start.ps1`, static sites, and PHP entry points.
 - Starts and stops development processes, assigns free preview ports, and streams their output.
@@ -14,6 +15,7 @@ The server binds to your loopback interface by default. Project paths, Git state
 - Opens projects in the file manager, terminal, or a detected editor.
 - Supports favorites, recent projects, a context-aware global search (`Ctrl+K`), technology filters, and grid/list views.
 - Includes a workspace-wide Git control center for browsing every repository, exploring the complete commit history and per-commit diffs, selecting and staging files in batches, safely discarding local changes, generating local commit-message suggestions, committing, and syncing without leaving DevHub.
+- Supports switching and creating branches, undoing the last unpushed commit (changes stay staged), and discarding new files to the Windows Recycle Bin instead of deleting them permanently.
 - Integrates with Laragon on Windows, including local virtual hosts and service controls.
 - Can start silently when you sign in to Windows.
 
