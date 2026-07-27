@@ -820,24 +820,25 @@ function renderGitPage() {
   if (visible.length && !visible.some((project) => project.id === state.activeGitProjectId)) state.activeGitProjectId = visible[0].id;
   const selected = repositories.find((project) => project.id === state.activeGitProjectId) || null;
   const changedRepositories = repositories.filter((project) => project.git.dirty).length;
-  const changedFiles = repositories.reduce((sum, project) => sum + (project.git.changedFiles ?? project.git.files.length), 0);
   const syncRepositories = repositories.filter((project) => project.git.ahead || project.git.behind).length;
-  const conflicts = repositories.reduce((sum, project) => sum + gitConflictCount(project.git), 0);
+  const conflictRepositories = repositories.filter((project) => gitConflictCount(project.git) > 0).length;
   const filterLabels = { all: "Alle", changed: "Geändert", staged: "Vorgemerkt", sync: "Synchronisieren", conflicts: "Konflikte", clean: "Sauber" };
-  const filters = Object.entries(filterLabels).map(([filter, label]) => `<button class="${state.gitFilter === filter ? "active" : ""}" data-git-filter="${filter}" aria-pressed="${state.gitFilter === filter}">${label}</button>`).join("");
+  const filters = Object.entries(filterLabels).map(([filter, label]) => {
+    const active = state.gitFilter === filter;
+    const count = repositories.filter((project) => gitRepositoryMatches(project, filter)).length;
+    return `<button class="${active ? "active" : ""}" data-git-filter="${filter}" aria-pressed="${active}">${label} <b>${count}</b></button>`;
+  }).join("");
+  const deckSummary = !repositories.length ? "Kein Repository im Workspace erkannt"
+    : conflictRepositories ? `${conflictRepositories} ${conflictRepositories === 1 ? "Repository braucht" : "Repositories brauchen"} Konfliktlösung`
+    : changedRepositories ? `${changedRepositories} von ${repositories.length} Repositories mit offenen Änderungen`
+    : syncRepositories ? `${syncRepositories} ${syncRepositories === 1 ? "Repository wartet" : "Repositories warten"} auf Synchronisierung`
+    : `Alle ${repositories.length} Repositories sind sauber und synchron`;
 
-  const gitPageHtml = `<header class="git-command-deck">
+  const gitPageHtml = `<header class="git-command-deck ${conflictRepositories ? "has-conflicts" : ""}">
     <div class="git-command-title">
       <span class="git-command-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <div><p class="eyebrow">Repository control</p><h1>Git-Zentrale</h1><span>${repositories.length} Repositories · ein Arbeitsstand</span></div>
+      <div><p class="eyebrow">Repository control</p><h1>Git-Zentrale</h1><span>${deckSummary}</span></div>
     </div>
-    <div class="git-command-metrics" aria-label="Git-Status im Workspace">
-      <button data-git-filter="all"><i class="metric-dot repositories"></i><span><strong>${repositories.length}</strong><small>Repositories</small></span></button>
-      <button data-git-filter="changed"><i class="metric-dot changes"></i><span><strong>${changedFiles}</strong><small>offene Dateien</small></span></button>
-      <button data-git-filter="sync"><i class="metric-dot sync"></i><span><strong>${syncRepositories}</strong><small>zu synchronisieren</small></span></button>
-      <button data-git-filter="conflicts"><i class="metric-dot ${conflicts ? "conflicts" : "clean"}"></i><span><strong>${conflicts}</strong><small>Konflikte</small></span></button>
-    </div>
-    <button class="git-command-refresh" data-rescan-workspace title="Alle Repositories neu einlesen"><i class="fa-solid fa-rotate" aria-hidden="true"></i><span>Status aktualisieren</span></button>
   </header>
   <div class="git-page-toolbar">
     <div class="git-filter-tabs" aria-label="Repositories filtern">${filters}</div>
