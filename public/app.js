@@ -9,12 +9,14 @@ const state = {
   page: location.hash === "#git" ? "git" : "projects",
   filter: "all",
   technology: null,
+  category: localStorage.getItem("devhub_category") || null,
   query: "",
   gitQuery: "",
   gitFilter: localStorage.getItem("devhub_git_filter") || "all",
   activeGitProjectId: localStorage.getItem("devhub_git_project") || null,
   sort: localStorage.getItem("devhub_sort") || "smart",
   view: localStorage.getItem("devhub_view") || "grid",
+  group: localStorage.getItem("devhub_group") === "category" ? "category" : "none",
   favorites: new Set(Array.isArray(storedFavorites) ? storedFavorites : []),
   recent: Array.isArray(storedRecent) ? storedRecent : [],
   expandedProjects: new Set(),
@@ -48,12 +50,15 @@ const elements = {
   rootLabel: document.querySelector("#drive-label"), rootPath: document.querySelector("#workspace-path"), workspaceSettings: document.querySelector("#workspace-settings"),
   workspaceDialog: document.querySelector("#workspace-dialog"), workspaceForm: document.querySelector("#workspace-form"), workspaceInput: document.querySelector("#workspace-input"),
   workspaceBrowse: document.querySelector("#workspace-browse"), workspaceSave: document.querySelector("#workspace-save"),
+  groupToggle: document.querySelector("#group-toggle"),
   resultCount: document.querySelector("#result-count"), projectCount: document.querySelector("#project-count"),
   runningCount: document.querySelector("#running-count"), launcherCount: document.querySelector("#launcher-count"), allCount: document.querySelector("#all-count"),
   favoriteCount: document.querySelector("#favorite-count"), recentCount: document.querySelector("#recent-count"), runningFilterCount: document.querySelector("#running-filter-count"),
   attentionCount: document.querySelector("#attention-count"), gitRepositoryCount: document.querySelector("#git-repository-count"),
   scanStatus: document.querySelector("#scan-status"), search: document.querySelector("#search"), sort: document.querySelector("#sort"), rescan: document.querySelector("#rescan"),
   techFilters: document.querySelector("#tech-filters"), mobileTech: document.querySelector("#mobile-tech"), clearTech: document.querySelector("#clear-tech"), activeFilter: document.querySelector("#active-filter"),
+  categoryGroup: document.querySelector("#category-group"), categoryFilters: document.querySelector("#category-filters"),
+  mobileCategory: document.querySelector("#mobile-category"), clearCategory: document.querySelector("#clear-category"),
   laragonState: document.querySelector("#laragon-state"), webState: document.querySelector("#web-state"), databaseState: document.querySelector("#database-state"),
   serviceSummary: document.querySelector("#service-summary"), runtimePorts: document.querySelector("#runtime-ports"), laragonToggle: document.querySelector("#laragon-toggle"), laragonToggleLabel: document.querySelector("#laragon-toggle-label"),
   laragonOpen: document.querySelector("#laragon-open"), laragonOpenLabel: document.querySelector("#laragon-open-label"), laragonReload: document.querySelector("#laragon-reload"),
@@ -184,6 +189,17 @@ function markRecent(projectId) {
   localStorage.setItem("devhub_recent", JSON.stringify(state.recent));
 }
 
+function categoryLabel(categoryPath) {
+  return state.projects.find((project) => project.categoryPath === categoryPath)?.category || categoryPath;
+}
+
+function setCategoryFilter(categoryPath) {
+  state.category = categoryPath;
+  if (categoryPath) localStorage.setItem("devhub_category", categoryPath);
+  else localStorage.removeItem("devhub_category");
+  render(false);
+}
+
 function getVisibleProjects() {
   const query = state.query.trim().toLocaleLowerCase("de");
   let projects = state.projects.filter((project) => {
@@ -191,9 +207,10 @@ function getVisibleProjects() {
     if (state.filter === "recent" && !state.recent.includes(project.id)) return false;
     if (state.filter === "running" && !projectIsRunning(project)) return false;
     if (state.filter === "attention" && projectAttentionReasons(project).length === 0) return false;
+    if (state.category && project.categoryPath !== state.category) return false;
     if (state.technology && !project.technologies.includes(state.technology)) return false;
     if (!query) return true;
-    return [project.name, project.description, project.relativePath, project.git?.branch, ...project.technologies,
+    return [project.name, project.description, project.relativePath, project.category, project.git?.branch, ...project.technologies,
       ...project.launchers.flatMap((launcher) => [launcher.name, launcher.command, launcher.relativeCwd])]
       .join(" ").toLocaleLowerCase("de").includes(query);
   });
@@ -955,7 +972,7 @@ function renderProjectDialog() {
       <div class="detail-accent"></div>
       <div class="detail-title-row">
         ${project.thumbnailUrl ? `<img class="detail-symbol" src="${escapeHtml(project.thumbnailUrl)}" alt="">` : `<span class="stack-symbol detail-symbol">${escapeHtml(symbol)}</span>`}
-        <div class="detail-title-copy"><p class="eyebrow">Projektakte</p><h2 id="project-dialog-title">${escapeHtml(project.name)}</h2><code>${escapeHtml(projectPath(project))}</code></div>
+        <div class="detail-title-copy"><p class="eyebrow">Projektakte${project.category ? ` · ${escapeHtml(project.category)}` : ""}</p><h2 id="project-dialog-title">${escapeHtml(project.name)}</h2><code>${escapeHtml(projectPath(project))}</code></div>
         <button class="favorite-button detail-favorite ${favorite ? "active" : ""}" data-favorite="${project.id}" aria-label="${favorite ? "Aus Favoriten entfernen" : "Zu Favoriten hinzufügen"}" aria-pressed="${favorite}">${favoriteIcon(favorite)}</button>
         <button class="project-dialog-close" data-close-project aria-label="Projektdetails schließen">×</button>
       </div>
@@ -1031,6 +1048,24 @@ function renderStats() {
   elements.attentionCount.textContent = state.projects.filter((project) => projectAttentionReasons(project).length > 0).length;
 }
 
+function renderCategoryFilters() {
+  const counts = new Map();
+  for (const project of state.projects) {
+    if (project.categoryPath) counts.set(project.categoryPath, (counts.get(project.categoryPath) || 0) + 1);
+  }
+  const entries = [...counts.entries()].sort((a, b) => categoryLabel(a[0]).localeCompare(categoryLabel(b[0]), "de"));
+  elements.categoryGroup.hidden = entries.length === 0;
+  elements.mobileCategory.hidden = entries.length === 0;
+  elements.categoryFilters.innerHTML = entries.map(([categoryPath, count]) => {
+    const active = state.category === categoryPath;
+    return `<button class="tech-filter ${active ? "active" : ""}" data-category="${escapeHtml(categoryPath)}" aria-pressed="${active}">${escapeHtml(categoryLabel(categoryPath))} · ${count}</button>`;
+  }).join("");
+  elements.mobileCategory.innerHTML = '<option value="">Kategorie</option>' + entries
+    .map(([categoryPath, count]) => `<option value="${escapeHtml(categoryPath)}">${escapeHtml(categoryLabel(categoryPath))} · ${count}</option>`).join("");
+  elements.mobileCategory.value = state.category || "";
+  elements.clearCategory.hidden = !state.category;
+}
+
 function renderTechFilters() {
   const counts = new Map();
   state.projects.forEach((project) => project.technologies.forEach((technology) => counts.set(technology, (counts.get(technology) || 0) + 1)));
@@ -1081,18 +1116,51 @@ function renderServiceDock() {
 
 const cardTemplate = document.createElement("template");
 
-function syncProjectGrid(projects) {
+// Projekte ohne Kategorieordner liegen direkt im Workspace und bekommen eine eigene Sammelgruppe am Ende.
+const UNCATEGORIZED_GROUP = " root";
+
+function projectGroups(projects) {
+  const groups = new Map();
+  for (const project of projects) {
+    const key = project.categoryPath || UNCATEGORIZED_GROUP;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(project);
+  }
+  return [...groups.entries()]
+    .map(([key, items]) => ({ key, label: key === UNCATEGORIZED_GROUP ? "Ohne Kategorie" : categoryLabel(key), items }))
+    .sort((a, b) => Number(a.key === UNCATEGORIZED_GROUP) - Number(b.key === UNCATEGORIZED_GROUP) || a.label.localeCompare(b.label, "de"));
+}
+
+function groupHeading(group) {
+  const filterable = group.key !== UNCATEGORIZED_GROUP;
+  const title = filterable ? `Nur „${group.label}“ anzeigen` : "Projekte direkt im Workspace";
+  return `<div class="group-heading" ${filterable ? `data-group-filter="${escapeHtml(group.key)}"` : ""} title="${escapeHtml(title)}" role="${filterable ? "button" : "presentation"}" ${filterable ? 'tabindex="0"' : ""}>
+    <span class="group-heading-label">${escapeHtml(group.label)}</span>
+    <span class="group-heading-count">${group.items.length}</span>
+  </div>`;
+}
+
+function gridEntries(projects) {
   const renderer = state.view === "list" ? projectListItem : projectCard;
+  if (state.group !== "category") return projects.map((project) => ({ key: `project:${project.id}`, html: renderer(project) }));
+  const entries = [];
+  for (const group of projectGroups(projects)) {
+    entries.push({ key: `group:${group.key}`, html: groupHeading(group) });
+    for (const project of group.items) entries.push({ key: `project:${project.id}`, html: renderer(project) });
+  }
+  return entries;
+}
+
+function syncProjectGrid(projects) {
   const grid = elements.grid;
   const existing = new Map();
   for (const child of grid.children) {
-    if (child.dataset.project) existing.set(child.dataset.project, child);
+    if (child.dataset.gridKey) existing.set(child.dataset.gridKey, child);
   }
   const desired = [];
-  for (const project of projects) {
-    const html = renderer(project);
-    const current = existing.get(project.id);
-    existing.delete(project.id);
+  for (const { key, html } of gridEntries(projects)) {
+    const current = existing.get(key);
+    existing.delete(key);
     if (current && current.__devhubHtml === html) {
       desired.push(current);
       continue;
@@ -1100,6 +1168,7 @@ function syncProjectGrid(projects) {
     cardTemplate.innerHTML = html;
     const fresh = cardTemplate.content.firstElementChild;
     fresh.remove();
+    fresh.dataset.gridKey = key;
     fresh.__devhubHtml = html;
     if (current) {
       fresh.classList.add("card-refresh");
@@ -1125,19 +1194,33 @@ function render(preserveFocus = true) {
   const focusSelection = focusKey && typeof activeElement.selectionStart === "number"
     ? [activeElement.selectionStart, activeElement.selectionEnd, activeElement.selectionDirection || "none"]
     : null;
+  // Eine umbenannte oder verschobene Kategorie darf die Liste nicht dauerhaft leer filtern.
+  if (state.category && state.projects.length && !state.projects.some((project) => project.categoryPath === state.category)) {
+    state.category = null;
+    localStorage.removeItem("devhub_category");
+  }
   const projects = getVisibleProjects();
   elements.resultCount.textContent = projects.length;
   elements.grid.classList.toggle("list-view", state.view === "list");
+  elements.grid.classList.toggle("grouped", state.group === "category");
+  elements.groupToggle.classList.toggle("active", state.group === "category");
+  elements.groupToggle.setAttribute("aria-pressed", String(state.group === "category"));
   syncProjectGrid(projects);
   elements.grid.hidden = projects.length === 0;
   elements.empty.hidden = projects.length !== 0;
   const noWorkspaceProjects = state.projects.length === 0;
   elements.emptyTitle.textContent = noWorkspaceProjects ? "Keine Projektordner erkannt" : "Keine passenden Projekte";
-  elements.emptyMessage.textContent = noWorkspaceProjects ? "Wähle den Ordner aus, der deine Projektordner enthält, oder prüfe die Leserechte." : "Ändere Suche, Ansicht oder Technologie-Filter.";
+  elements.emptyMessage.textContent = noWorkspaceProjects ? "Wähle den Ordner aus, der deine Projekt- oder Kategorieordner enthält, oder prüfe die Leserechte." : "Ändere Suche, Ansicht, Kategorie oder Technologie-Filter.";
   elements.emptyAction.textContent = noWorkspaceProjects ? "Workspace auswählen" : "Filter zurücksetzen";
-  elements.activeFilter.hidden = !state.technology;
-  if (state.technology) elements.activeFilter.innerHTML = `${escapeHtml(state.technology)} <button aria-label="Technologie-Filter entfernen">×</button>`;
+  const activeChips = [
+    state.category ? { kind: "category", label: categoryLabel(state.category), hint: "Kategorie-Filter entfernen" } : null,
+    state.technology ? { kind: "technology", label: state.technology, hint: "Technologie-Filter entfernen" } : null
+  ].filter(Boolean);
+  elements.activeFilter.hidden = activeChips.length === 0;
+  elements.activeFilter.innerHTML = activeChips
+    .map((chip) => `<span class="active-filter-chip">${escapeHtml(chip.label)} <button data-clear-filter="${chip.kind}" aria-label="${chip.hint}">×</button></span>`).join("");
   renderStats();
+  renderCategoryFilters();
   renderTechFilters();
   renderServiceDock();
   renderGitPage();
@@ -1467,6 +1550,7 @@ function openLogs(id) {
 
 function resetFilters() {
   state.filter = "all"; state.technology = null; state.query = ""; elements.search.value = "";
+  state.category = null; localStorage.removeItem("devhub_category");
   document.querySelectorAll(".side-link").forEach((button) => { const active = button.dataset.filter === "all"; button.classList.toggle("active", active); button.setAttribute("aria-pressed", String(active)); });
   render(false);
 }
@@ -1560,7 +1644,11 @@ function handleProjectInteraction(event) {
   if (card) openProjectDetails(card.dataset.project);
 }
 
-elements.grid.addEventListener("click", handleProjectInteraction);
+elements.grid.addEventListener("click", (event) => {
+  const heading = event.target.closest("[data-group-filter]");
+  if (heading) { setCategoryFilter(state.category === heading.dataset.groupFilter ? null : heading.dataset.groupFilter); return; }
+  handleProjectInteraction(event);
+});
 elements.runtimeTopology.addEventListener("click", handleProjectInteraction);
 elements.gitPage.addEventListener("click", (event) => {
   const filter = event.target.closest("[data-git-filter]");
@@ -1574,6 +1662,12 @@ elements.gitPage.addEventListener("click", (event) => {
   handleProjectInteraction(event);
 });
 elements.grid.addEventListener("keydown", (event) => {
+  const heading = event.target.closest("[data-group-filter]");
+  if (heading && event.target === heading && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    setCategoryFilter(state.category === heading.dataset.groupFilter ? null : heading.dataset.groupFilter);
+    return;
+  }
   const card = event.target.closest("[data-project]");
   if (card && event.target === card && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
@@ -1656,7 +1750,15 @@ document.querySelector("#mobile-view-filters").addEventListener("click", (event)
 elements.mobileTech.addEventListener("change", () => { state.technology = elements.mobileTech.value || null; render(false); });
 elements.techFilters.addEventListener("click", (event) => { const button = event.target.closest("[data-tech]"); if (!button) return; state.technology = state.technology === button.dataset.tech ? null : button.dataset.tech; render(false); });
 elements.clearTech.addEventListener("click", () => { state.technology = null; render(false); });
-elements.activeFilter.addEventListener("click", () => { state.technology = null; render(false); });
+elements.categoryFilters.addEventListener("click", (event) => { const button = event.target.closest("[data-category]"); if (button) setCategoryFilter(state.category === button.dataset.category ? null : button.dataset.category); });
+elements.mobileCategory.addEventListener("change", () => setCategoryFilter(elements.mobileCategory.value || null));
+elements.clearCategory.addEventListener("click", () => setCategoryFilter(null));
+elements.activeFilter.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-clear-filter]");
+  if (!button) return;
+  if (button.dataset.clearFilter === "category") setCategoryFilter(null);
+  else { state.technology = null; render(false); }
+});
 elements.search.addEventListener("input", () => {
   if (state.page === "git") state.gitQuery = elements.search.value;
   else state.query = elements.search.value;
@@ -1664,6 +1766,7 @@ elements.search.addEventListener("input", () => {
 });
 elements.sort.addEventListener("change", () => { state.sort = elements.sort.value; localStorage.setItem("devhub_sort", state.sort); render(false); });
 document.querySelector(".view-switch").addEventListener("click", (event) => { const button = event.target.closest("[data-view]"); if (!button) return; state.view = button.dataset.view; localStorage.setItem("devhub_view", state.view); render(false); });
+elements.groupToggle.addEventListener("click", () => { state.group = state.group === "category" ? "none" : "category"; localStorage.setItem("devhub_group", state.group); render(false); });
 elements.rescan.addEventListener("click", rescan); elements.emptyAction.addEventListener("click", () => state.projects.length ? resetFilters() : openWorkspaceSettings());
 elements.workspaceSettings.addEventListener("click", openWorkspaceSettings);
 elements.workspaceBrowse.addEventListener("click", pickWorkspace);

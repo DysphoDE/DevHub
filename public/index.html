@@ -36,6 +36,11 @@
         </nav>
       </section>
 
+      <section id="category-group" class="side-group stack-group" aria-labelledby="categories-heading" hidden>
+        <div class="side-label-row"><p class="side-label" id="categories-heading">Kategorien</p><button id="clear-category" hidden>Alle</button></div>
+        <div id="category-filters" class="tech-filters"></div>
+      </section>
+
       <section class="side-group stack-group" aria-labelledby="stacks-heading">
         <div class="side-label-row"><p class="side-label" id="stacks-heading">Technologien</p><button id="clear-tech" hidden>Alle</button></div>
         <div id="tech-filters" class="tech-filters"></div>
@@ -125,6 +130,7 @@
         <button data-mobile-filter="favorites" aria-pressed="false">Favoriten</button>
         <button data-mobile-filter="recent" aria-pressed="false">Zuletzt</button>
         <button data-mobile-filter="running" aria-pressed="false">Läuft</button>
+        <select id="mobile-category" aria-label="Kategorie filtern" hidden><option value="">Kategorie</option></select>
         <select id="mobile-tech" aria-label="Technologie filtern"><option value="">Technologie</option></select>
         </nav>
 
@@ -132,6 +138,7 @@
         <div id="active-filter" class="active-filter" hidden></div>
         <span class="result-label"><b id="result-count">0</b> Projekte sichtbar</span>
         <label class="sort-control"><span class="sr-only">Sortierung</span><select id="sort"><option value="smart">Intelligent</option><option value="modified">Zuletzt geändert</option><option value="name">Name A–Z</option><option value="opened">Zuletzt geöffnet</option></select></label>
+        <button id="group-toggle" class="group-toggle" aria-pressed="false" title="Projekte nach ihrem Kategorieordner gruppieren"><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span>Gruppieren</span></button>
         <div class="view-switch" aria-label="Darstellung">
           <button data-view="grid" class="active" aria-label="Rasteransicht" aria-pressed="true"><i class="fa-solid fa-border-all" aria-hidden="true"></i></button>
           <button data-view="list" aria-label="Listenansicht" aria-pressed="false"><i class="fa-solid fa-list" aria-hidden="true"></i></button>
@@ -166,7 +173,7 @@
           <input id="workspace-input" type="text" spellcheck="false" autocomplete="off" required aria-describedby="workspace-help workspace-impact">
           <button id="workspace-browse" type="button">Ordner wählen</button>
         </div>
-        <p id="workspace-help">DevHub behandelt jeden direkten Unterordner als Projekt und speichert diese Auswahl nur auf diesem Gerät.</p>
+        <p id="workspace-help">Unterordner ohne eigenen Quellcode gelten als Kategorie, ihre Unterordner als Projekte. Die Auswahl bleibt nur auf diesem Gerät.</p>
         <p id="workspace-impact" class="workspace-impact"><span aria-hidden="true">!</span> Beim Wechsel werden von DevHub gestartete Prozesse beendet und der neue Workspace sofort eingelesen.</p>
       </div>
       <footer class="workspace-dialog-foot">

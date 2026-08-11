@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +14,30 @@ const starterFiles = new Map<string, LauncherKind>([
   ["start.ps1", "powershell"]
 ]);
 const thumbnailNames = new Set(["thumbnail.jpg", "thumbnail.jpeg", "thumbnail.png", "thumbnail.webp", "thumbnail.gif"]);
+// Manifeste und Konfigurationen, die einen Ordner zweifelsfrei zu einem Projekt machen.
+const projectManifestFiles = new Set([
+  "package.json", "composer.json", "project.ini", "requirements.txt", "pyproject.toml", "cargo.toml",
+  "go.mod", "gemfile", "dockerfile", "docker-compose.yml", "compose.yml", "manifest.json", "makefile",
+  "start.bat", "start.cmd", "start.ps1", ".env", ".env.example", "tsconfig.json"
+]);
+// Endungen, die echten Quellcode bedeuten. Bewusst ohne .html/.css/.md: Ein Ordner voller
+// exportierter Dokumente (F:\clients\<kunde>\uebergabe) ist kein Projekt, sondern Ablage.
+const sourceCodeExtensions = new Set([
+  ".php", ".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx", ".vue", ".svelte", ".astro", ".py", ".lua",
+  ".toc", ".cs", ".csproj", ".sln", ".java", ".rb", ".go", ".rs", ".bat", ".cmd", ".ps1", ".sh"
+]);
+// Ordner, die zu einem Projekt gehören statt eines zu sein. Sie machen ihren Elternordner nie zur
+// Kategorie – sonst würde aus foo/src/main.js ein Projekt namens "Src".
+const structuralFolderNames = new Set([
+  "src", "source", "sources", "app", "apps", "lib", "libs", "public", "public_html", "htdocs", "web",
+  "www", "assets", "static", "docs", "doc", "documentation", "test", "tests", "spec", "specs",
+  "scripts", "bin", "config", "conf", "settings", "includes", "inc", "styles", "css", "js",
+  "javascript", "img", "images", "icons", "fonts", "media", "uploads", "logs", "migrations",
+  "database", "db", "sql", "partials", "layouts", "templates", "components", "views"
+]);
+// Ordnernamen, die nichts über das Projekt aussagen – dann beschreibt der Elternordner es besser
+// (clients/harriet-budjarek/website → "Harriet Budjarek" statt "Website").
+const genericFolderNames = new Set(["website", "web", "site", "www", "app", "frontend", "client", "main", "source", "src", "projekt", "project"]);
 const genericHeadings = /^(readme|getting started|welcome|documentation|installation|development|home|react\s*\+\s*vite|vite\s*\+.*|astro starter kit.*)$/i;
 
 interface PackageData {
@@ -40,7 +65,12 @@ interface MetadataCandidate {
 interface WorkspaceWebInfo {
   documentRoot: string | null;
   virtualHostCount: number;
-  hosts: Array<{ documentRoot: string; serverName: string }>;
+  hosts: Array<{ documentRoot: string; serverName: string; servable: boolean }>;
+}
+
+interface DiscoveredProject {
+  absolutePath: string;
+  categorySegments: string[];
 }
 
 interface ScanEvidence {
@@ -74,7 +104,10 @@ function depthFrom(base: string, candidate: string): number {
 function pathStartsWith(candidate: string, parent: string): boolean {
   const normalizedCandidate = path.resolve(candidate).toLowerCase();
   const normalizedParent = path.resolve(parent).toLowerCase();
-  return normalizedCandidate === normalizedParent || normalizedCandidate.startsWith(normalizedParent + path.sep.toLowerCase());
+  if (normalizedCandidate === normalizedParent) return true;
+  // Laufwerkswurzeln behalten ihren Trenner ("F:\"), ein zweiter würde nie passen.
+  const prefix = normalizedParent.endsWith(path.sep) ? normalizedParent : normalizedParent + path.sep;
+  return normalizedCandidate.startsWith(prefix);
 }
 
 function humanize(value: string): string {
@@ -172,6 +205,22 @@ async function readProjectIni(projectPath: string): Promise<Record<string, strin
   return parseProjectIni(await readText(path.join(projectPath, "project.ini"), 64_000));
 }
 
+const bundlerConfigPattern = /^(?:vite|next|nuxt|astro|svelte|webpack|rollup|remix|vue|craco|quasar)\.config\.[cm]?[jt]s$/;
+
+// Ein Virtual Host allein beweist nichts: Apache kann nur ausliefern, was fertig im DocumentRoot
+// liegt. PHP immer, HTML nur wenn es der fertige Stand ist – die rohe index.html eines Vite- oder
+// Next-Projekts ist im Browser unbrauchbar, ein leeres public/ erst recht. Ein package.json neben
+// fertigem HTML ist dagegen harmlos (Tailwind-Build o. ä.), erst zusammen mit src/ wird es Quelle.
+async function isServableDocumentRoot(documentRoot: string): Promise<boolean> {
+  const entries = await readDirectoryEntries(documentRoot);
+  const files = new Set(entries.filter((entry) => entry.isFile()).map((entry) => entry.name.toLowerCase()));
+  if (files.has("index.php")) return true;
+  if (!files.has("index.html") && !files.has("index.htm")) return false;
+  if ([...files].some((name) => bundlerConfigPattern.test(name))) return false;
+  const hasSourceDirectory = entries.some((entry) => entry.isDirectory() && entry.name.toLowerCase() === "src");
+  return !(files.has("package.json") && hasSourceDirectory);
+}
+
 async function readWorkspaceWebInfo(config: AppConfig): Promise<WorkspaceWebInfo> {
   const result: WorkspaceWebInfo = { documentRoot: null, virtualHostCount: 0, hosts: [] };
   const ini = await readText(path.join(config.laragonRoot, "usr", "laragon.ini"), 128_000);
@@ -187,7 +236,9 @@ async function readWorkspaceWebInfo(config: AppConfig): Promise<WorkspaceWebInfo
       const contents = await readText(path.join(sitesDirectory, file.name), 64_000);
       const documentRoot = contents.match(/^\s*DocumentRoot\s+["']?([^"'\r\n]+)["']?/im)?.[1]?.trim();
       const serverName = contents.match(/^\s*ServerName\s+([^\s#]+)/im)?.[1]?.trim();
-      if (documentRoot && serverName) result.hosts.push({ documentRoot: path.resolve(documentRoot), serverName });
+      if (!documentRoot || !serverName) continue;
+      const resolvedRoot = path.resolve(documentRoot);
+      result.hosts.push({ documentRoot: resolvedRoot, serverName, servable: await isServableDocumentRoot(resolvedRoot) });
     }
   } catch {
     // Laragon or its Apache configuration is optional.
@@ -268,6 +319,94 @@ async function packageLaunchers(packagePath: string, projectId: string, projectP
       preferred: script === "dev" || (index === 0 && !scripts.includes("dev"))
     };
   });
+}
+
+async function readDirectoryEntries(directory: string): Promise<Dirent[]> {
+  try {
+    return await readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+function isProjectCandidate(entry: Dirent, ignored: Set<string>): boolean {
+  if (!entry.isDirectory() || entry.isSymbolicLink()) return false;
+  if (entry.name.startsWith(".") || entry.name.startsWith("_") || entry.name.startsWith("$")) return false;
+  return !ignored.has(entry.name.toLowerCase());
+}
+
+function isSourceFile(entry: Dirent): boolean {
+  if (!entry.isFile()) return false;
+  const lowerName = entry.name.toLowerCase();
+  return projectManifestFiles.has(lowerName)
+    || sourceCodeExtensions.has(path.extname(lowerName))
+    || /\.config\.(?:js|mjs|cjs|ts)$/.test(lowerName);
+}
+
+// Der Ordner selbst trägt die Spuren eines Projekts: ein Manifest, ein Repository, Quellcode oder
+// eine Startseite. Lose .html-Exporte oder ein Stylesheet reichen bewusst nicht.
+function hasDirectProjectEvidence(entries: Dirent[]): boolean {
+  return entries.some((entry) => {
+    if (entry.isDirectory()) return entry.name.toLowerCase() === ".git";
+    return isSourceFile(entry) || /^index\.(?:html?|php)$/i.test(entry.name);
+  });
+}
+
+// Letzte Instanz für Ordner ohne eigene Spuren und ohne Unterprojekte: Liegt irgendwo darunter
+// überhaupt Code? Sonst ist es eine Ablage (Bilder, PDFs, Dokumentation) und kein Projekt.
+async function containsSourceCode(directory: string, entries: Dirent[], ignored: Set<string>, depth = 3): Promise<boolean> {
+  if (entries.some(isSourceFile)) return true;
+  if (depth <= 0) return false;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    if (entry.name.startsWith(".") || ignored.has(entry.name.toLowerCase())) continue;
+    const child = path.join(directory, entry.name);
+    if (await containsSourceCode(child, await readDirectoryEntries(child), ignored, depth - 1)) return true;
+  }
+  return false;
+}
+
+// Dreistufige Einordnung je Ordner, damit auch F:\clients\<kunde>\website gefunden wird:
+//   1. eigene Projektspuren  → Projekt (Unterordner gehören dazu, siehe Monorepo)
+//   2. bündelt Projektordner → Kategorie, eine Ebene tiefer weitersuchen
+//   3. Code irgendwo darunter → Projekt, sonst wird der Ordner ignoriert
+async function discoverProjects(
+  directory: string,
+  entries: Dirent[],
+  categorySegments: string[],
+  remainingCategoryDepth: number,
+  ignored: Set<string>
+): Promise<DiscoveredProject[]> {
+  const discovered: DiscoveredProject[] = [];
+  for (const entry of entries) {
+    if (!isProjectCandidate(entry, ignored) || structuralFolderNames.has(entry.name.toLowerCase())) continue;
+    const absolutePath = path.join(directory, entry.name);
+    const childEntries = await readDirectoryEntries(absolutePath);
+
+    if (hasDirectProjectEvidence(childEntries)) {
+      discovered.push({ absolutePath, categorySegments });
+      continue;
+    }
+
+    if (remainingCategoryDepth > 0) {
+      const nested = await discoverProjects(
+        absolutePath,
+        childEntries,
+        [...categorySegments, entry.name],
+        remainingCategoryDepth - 1,
+        ignored
+      );
+      if (nested.length) {
+        discovered.push(...nested);
+        continue;
+      }
+    }
+
+    if (await containsSourceCode(absolutePath, childEntries, ignored)) {
+      discovered.push({ absolutePath, categorySegments });
+    }
+  }
+  return discovered;
 }
 
 async function scanEvidence(projectPath: string, config: AppConfig, ownAppPath: string): Promise<ScanEvidence> {
@@ -432,23 +571,26 @@ export async function readGitInfo(repositoryPath: string | null, projectPath: st
   }
 }
 
-function urlForProject(projectPath: string, metadataUrl: string | undefined, webInfo: WorkspaceWebInfo): string | null {
+// Ohne passenden Virtual Host reicht der Pfad unterhalb des Apache-DocumentRoot: Ein Projekt in
+// F:\fun\dein-eis-guide ist bei DocumentRoot F:\ direkt unter http://localhost/fun/dein-eis-guide/ erreichbar.
+function urlForProject(projectPath: string, servableRoot: string | null, metadataUrl: string | undefined, webInfo: WorkspaceWebInfo): string | null {
   if (metadataUrl && /^https?:\/\//i.test(metadataUrl)) return metadataUrl;
-  const host = webInfo.hosts.find((candidate) => pathStartsWith(candidate.documentRoot, projectPath));
+  // Nur Virtual Hosts, deren DocumentRoot tatsächlich etwas ausliefert – sonst führt der grüne
+  // Button auf ein Verzeichnis-Listing oder eine kaputte Rohfassung.
+  const host = webInfo.hosts.find((candidate) => candidate.servable && pathStartsWith(candidate.documentRoot, projectPath));
   if (host) return `http://${host.serverName}/`;
-  if (webInfo.documentRoot && pathStartsWith(projectPath, webInfo.documentRoot)) {
-    const relative = path.relative(webInfo.documentRoot, projectPath).split(path.sep).map(encodeURIComponent).join("/");
-    return `http://localhost/${relative}/`;
-  }
-  return null;
+  if (!servableRoot || !webInfo.documentRoot || !pathStartsWith(servableRoot, webInfo.documentRoot)) return null;
+  const relative = path.relative(webInfo.documentRoot, servableRoot).split(path.sep).map(encodeURIComponent).join("/");
+  return relative ? `http://localhost/${relative}/` : "http://localhost/";
 }
 
 function sortByDepth(projectPath: string, paths: string[]): string[] {
   return [...paths].sort((a, b) => depthFrom(projectPath, a) - depthFrom(projectPath, b) || a.localeCompare(b));
 }
 
-async function scanProject(projectPath: string, rootPath: string, config: AppConfig, ownAppPath: string, webInfo: WorkspaceWebInfo): Promise<ProjectDefinition> {
-  const relativePath = toPosix(path.relative(rootPath, projectPath));
+async function scanProject(discovered: DiscoveredProject, config: AppConfig, ownAppPath: string, webInfo: WorkspaceWebInfo): Promise<ProjectDefinition> {
+  const projectPath = discovered.absolutePath;
+  const relativePath = toPosix(path.relative(config.scanRoot, projectPath));
   const projectId = stableId(relativePath);
   const isOwnApp = path.relative(projectPath, ownAppPath) === "";
   const evidence = await scanEvidence(projectPath, config, ownAppPath);
@@ -490,13 +632,18 @@ async function scanProject(projectPath: string, rootPath: string, config: AppCon
   const sortedTechnologies = [...technologies].sort((a, b) => technologyOrder.indexOf(a) - technologyOrder.indexOf(b));
   const packageName = primaryPackage?.displayName || (primaryPackage?.name ? humanize(primaryPackage.name) : undefined);
   const composerName = primaryComposer?.name ? humanize(primaryComposer.name.split("/").pop() ?? primaryComposer.name) : undefined;
-  const folderName = humanize(path.basename(projectPath));
+  // "website" beschreibt kein Projekt – bei clients/harriet-budjarek/website zählt der Kundenordner.
+  const rawFolderName = path.basename(projectPath);
+  const namingSegment = genericFolderNames.has(rawFolderName.toLocaleLowerCase("de")) && discovered.categorySegments.length
+    ? discovered.categorySegments[discovered.categorySegments.length - 1]
+    : rawFolderName;
+  const folderName = humanize(namingSegment);
   const inferredName = metadata.title || primaryPackage?.displayName || chooseInferredName(folderName, [
     depthFrom(projectPath, evidence.readmePaths[0] ?? projectPath) <= 1 ? readmeMeta.name : undefined,
     htmlMeta.name,
     packageName,
     composerName
-  ], path.basename(projectPath));
+  ], namingSegment);
   const inferredDescription = metadata.description || primaryPackage?.description || primaryComposer?.description || htmlMeta.description || readmeMeta.description
     || autoDescription(sortedTechnologies, evidence.fileCount, evidence.truncated);
 
@@ -513,9 +660,21 @@ async function scanProject(projectPath: string, rootPath: string, config: AppCon
     });
   }
 
-  const preferredPhpEntry = evidence.phpEntries.find((entry) => path.basename(path.dirname(entry)).toLowerCase() === "public") ?? evidence.phpEntries[0];
+  const publicPhpEntry = evidence.phpEntries.find((entry) => path.basename(path.dirname(entry)).toLowerCase() === "public");
+  const preferredPhpEntry = publicPhpEntry ?? evidence.phpEntries[0];
   const preferredHtmlEntry = evidence.htmlEntries.find((entry) => depthFrom(projectPath, entry) <= 1) ?? evidence.htmlEntries[0];
   const webRoot = preferredPhpEntry ? path.dirname(preferredPhpEntry) : preferredHtmlEntry ? path.dirname(preferredHtmlEntry) : null;
+  // Für die Apache-Adresse zählt der Einstieg, den ein Besucher erwartet: public/ (Laravel) zuerst,
+  // sonst der flachste index – ein tiefes Unterwerkzeug wie public/admin/index.php darf die
+  // Startseite nicht verdrängen, auch wenn PHP sonst Vorrang vor HTML hat.
+  const indexEntries = [...evidence.phpEntries, ...evidence.htmlEntries]
+    .filter((entry) => /^index\.(?:php|html?)$/i.test(path.basename(entry)))
+    .sort((a, b) => depthFrom(projectPath, a) - depthFrom(projectPath, b)
+      || Number(path.extname(a).toLowerCase() !== ".php") - Number(path.extname(b).toLowerCase() !== ".php"));
+  const apacheRoot = publicPhpEntry ? path.dirname(publicPhpEntry) : indexEntries[0] ? path.dirname(indexEntries[0]) : webRoot;
+  // Apache liefert nur aus, was ohne Buildschritt im Ordner liegt: PHP immer, statisches HTML nur
+  // ohne Node-Manifest – bei Vite oder Next ist die rohe index.html im Browser unbrauchbar.
+  const apacheServableRoot = apacheRoot && (preferredPhpEntry || !validPackages.length) ? apacheRoot : null;
   const hasPreferredLauncher = launchers.some((launcher) => launcher.preferred);
   if (preferredPhpEntry && webRoot) {
     launchers.push({
@@ -543,11 +702,13 @@ async function scanProject(projectPath: string, rootPath: string, config: AppCon
     description: truncate(inferredDescription),
     relativePath,
     absolutePath: projectPath,
+    category: discovered.categorySegments.length ? discovered.categorySegments.map(humanize).join(" / ") : null,
+    categoryPath: discovered.categorySegments.length ? discovered.categorySegments.join("/") : null,
     thumbnailPath: evidence.thumbnailPath,
     modifiedAt: new Date(evidence.maxModifiedMs || Date.now()).toISOString(),
     technologies: sortedTechnologies.length ? sortedTechnologies : ["Projektordner"],
     kind: sortedTechnologies[0] ?? "Projektordner",
-    defaultUrl: webRoot || metadata.url ? urlForProject(projectPath, metadata.url, webInfo) : null,
+    defaultUrl: urlForProject(projectPath, apacheServableRoot, metadata.url, webInfo),
     webRoot,
     git: await readGitInfo(evidence.gitRoot, projectPath),
     fileCount: evidence.fileCount,
@@ -569,14 +730,10 @@ async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Pr
 }
 
 export async function scanWorkspace(config: AppConfig, ownAppPath: string): Promise<ProjectDefinition[]> {
-  const entries = await readdir(config.scanRoot, { withFileTypes: true });
   const ignored = new Set(config.ignore.map((name) => name.toLowerCase()));
-  const directories = entries
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-    .filter((entry) => !entry.name.startsWith(".") && !entry.name.startsWith("_") && !entry.name.startsWith("$"))
-    .filter((entry) => !ignored.has(entry.name.toLowerCase()))
-    .map((entry) => path.join(config.scanRoot, entry.name));
+  const rootEntries = await readdir(config.scanRoot, { withFileTypes: true });
+  const discovered = await discoverProjects(config.scanRoot, rootEntries, [], config.categoryDepth, ignored);
   const webInfo = await readWorkspaceWebInfo(config);
-  const projects = await mapLimit(directories, 6, (directory) => scanProject(directory, config.scanRoot, config, ownAppPath, webInfo));
+  const projects = await mapLimit(discovered, 6, (entry) => scanProject(entry, config, ownAppPath, webInfo));
   return projects.sort((a, b) => a.name.localeCompare(b.name, "de"));
 }

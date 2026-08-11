@@ -45,17 +45,36 @@ The selection is saved in a local `devhub.config.json` file. That file is ignore
 
 ## Workspace layout
 
-DevHub treats each direct child of the selected folder as one project:
+Every folder is classified in three steps, which lets projects sit several levels below the workspace root:
+
+1. **Own traces** — a manifest, a `.git` directory, source files, or an `index.html`/`index.php` make the folder a project. Its subfolders belong to it (monorepos stay one project).
+2. **Bundles projects** — a folder without traces of its own whose children are projects becomes a category, and the search continues one level deeper.
+3. **Code somewhere below** — otherwise the folder is only a project if any source file exists underneath. Folders holding nothing but documents, exports, or images are skipped.
 
 ```text
-Projects/
-├── customer-portal/     ← project
-├── docs-site/           ← project
-├── internal-api/        ← project
-└── DevHub/              ← listed for Git and project actions
+F:\
+├── projects/                ← category
+│   ├── customer-portal/     ← project
+│   └── docs-site/           ← project
+├── clients/                 ← category
+│   └── bernd-stapfner/      ← category
+│       ├── website/         ← project (named after the client folder)
+│       ├── variants/        ← project
+│       ├── uebergabe/       ← skipped (PDFs and HTML exports, no code)
+│       └── resources/       ← skipped (images)
+├── pizza-recipe/            ← project (source files, no category)
+└── projects/devhub/         ← listed for Git and project actions
 ```
 
+Loose `.html`, `.css`, or `.md` files do not count as source code — otherwise every documentation folder would show up as a project. Conventional subfolder names (`src`, `public`, `assets`, `docs`, …) never become projects of their own.
+
+Categories appear as filters in the sidebar. Set `categoryDepth` to `0` to disable the grouping and read every direct child as a project again, or lower it to limit how deep categories may nest.
+
 Project metadata and launchers may be discovered recursively within each project. Large dependency and build directories are skipped automatically.
+
+### Browser button
+
+The green *Open in browser* action only appears when a running web server can actually answer. A Laragon virtual host counts only if its `DocumentRoot` holds an `index.php`, or an `index.html` that is not raw source — a bundler config or a `package.json` next to a `src/` directory means the folder still needs a build. Projects that only run through `npm run dev` therefore show their launcher instead of a link that would lead to a directory listing.
 
 When DevHub itself is inside the selected workspace, it remains visible so you can open it and use the Git workbench. Its own launch actions are hidden to prevent starting a second DevHub server on the same port.
 
@@ -92,6 +111,7 @@ Important options:
 | `publicHost` | `devhub` | Hostname used by the Windows installer |
 | `port` | `7331` | DevHub HTTP port |
 | `scanRoot` | `..` | Workspace containing the project folders |
+| `categoryDepth` | `3` | Levels of category folders above the projects (`0` disables grouping) |
 | `maxDepth` | `5` | Maximum metadata scan depth per project |
 | `maxEntriesPerProject` | `15000` | Safety limit for scanned entries |
 | `laragonRoot` | `C:\laragon` | Laragon installation directory |

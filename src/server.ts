@@ -54,6 +54,8 @@ function publicProject(project: ProjectDefinition): PublicProject {
     name: project.name,
     description: project.description,
     relativePath: project.relativePath,
+    category: project.category,
+    categoryPath: project.categoryPath,
     modifiedAt: project.modifiedAt,
     technologies: project.technologies,
     kind: project.kind,

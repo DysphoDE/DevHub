@@ -8,6 +8,7 @@ export interface AppConfig {
   autostartMode: AutostartMode;
   port: number;
   scanRoot: string;
+  categoryDepth: number;
   maxDepth: number;
   maxEntriesPerProject: number;
   ignore: string[];
@@ -63,6 +64,8 @@ export interface ProjectDefinition {
   description: string;
   relativePath: string;
   absolutePath: string;
+  category: string | null;
+  categoryPath: string | null;
   thumbnailPath: string | null;
   modifiedAt: string;
   technologies: string[];

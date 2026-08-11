@@ -4,6 +4,7 @@
   "autostartMode": "dev",
   "port": 7331,
   "scanRoot": "..",
+  "categoryDepth": 3,
   "maxDepth": 5,
   "maxEntriesPerProject": 15000,
   "laragonRoot": "C:\\laragon",
