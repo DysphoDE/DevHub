@@ -94,7 +94,7 @@
           <div><p class="eyebrow">Service control</p><h2 id="services-heading" class="dock-title">Lokale Dienste</h2><strong id="service-summary">System wird geprüft …</strong></div>
         </div>
         <div class="service-track" id="service-track">
-          <div class="service-node" data-service="laragon"><i></i><span>Laragon</span><b id="laragon-state">prüft</b></div>
+          <div class="service-node" data-service="stack"><i></i><span id="stack-name">Stack</span><b id="stack-state">prüft</b></div>
           <div class="track-line"></div>
           <div class="service-node" data-service="web"><i></i><span>Web</span><b id="web-state">offline</b></div>
           <div class="track-line"></div>
@@ -102,18 +102,18 @@
           <div id="runtime-ports" class="runtime-ports"></div>
         </div>
         <div class="dock-controls">
-          <div class="dock-actions" aria-label="Laragon steuern">
-            <button id="laragon-toggle" class="dock-button secondary offline">
+          <div class="dock-actions" id="stack-actions" aria-label="Lokalen Stack steuern">
+            <button id="stack-toggle" class="dock-button secondary offline">
               <i class="fa-solid fa-power-off" aria-hidden="true"></i>
-              <span><small>Webserver</small><strong id="laragon-toggle-label">Apache starten</strong></span>
+              <span><small>Webserver</small><strong id="stack-toggle-label">Webserver starten</strong></span>
             </button>
-            <button id="laragon-open" class="dock-button secondary">
+            <button id="stack-open" class="dock-button secondary">
               <i class="fa-regular fa-folder-open" aria-hidden="true"></i>
-              <span><small>Manager</small><strong id="laragon-open-label">Laragon öffnen</strong></span>
+              <span><small>Manager</small><strong id="stack-open-label">Öffnen</strong></span>
             </button>
-            <button id="laragon-reload" class="dock-button secondary" title="Virtual Hosts synchronisieren und Webserver neu laden">
+            <button id="stack-reload" class="dock-button secondary">
               <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i>
-              <span><small>Konfiguration</small><strong>VHosts laden</strong></span>
+              <span><small>Konfiguration</small><strong id="stack-reload-label">Neu laden</strong></span>
             </button>
           </div>
           <button id="runtime-details" class="topology-toggle" aria-expanded="false" aria-controls="runtime-topology">
@@ -201,10 +201,10 @@
       <div><p class="eyebrow">Lokale Änderungen</p><h2 id="git-discard-title">Änderungen verwerfen?</h2></div>
     </div>
     <div class="git-discard-body">
-      <p id="git-discard-description">Die ausgewählten Dateien werden auf ihren letzten Commit-Stand zurückgesetzt. Neue Dateien werden in den Windows-Papierkorb verschoben.</p>
+      <p id="git-discard-description">Die ausgewählten Dateien werden auf ihren letzten Commit-Stand zurückgesetzt. Neue Dateien werden in den Papierkorb verschoben.</p>
       <strong id="git-discard-count">0 Dateien ausgewählt</strong>
       <div id="git-discard-files" class="git-discard-files" aria-label="Dateien, deren Änderungen verworfen werden"></div>
-      <p class="git-discard-warning"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>Das Zurücksetzen geänderter Dateien lässt sich nicht rückgängig machen. Neue Dateien kannst du aus dem Papierkorb wiederherstellen.</p>
+      <p class="git-discard-warning"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span id="git-discard-warning-text">Das Zurücksetzen geänderter Dateien lässt sich nicht rückgängig machen. Neue Dateien kannst du aus dem Papierkorb wiederherstellen.</span></p>
     </div>
     <footer class="git-discard-foot">
       <button id="git-discard-cancel" type="button" class="secondary-button">Abbrechen</button>

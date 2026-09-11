@@ -8,13 +8,16 @@ import type { AppConfig } from "../src/types.js";
 
 function testConfig(root: string): AppConfig {
   return {
-    host: "127.0.0.1", publicHost: "devhub", autostartMode: "dev", port: 7331, scanRoot: root,
+    host: "127.0.0.1", publicHost: "devhub", publicUrl: null, autostartMode: "dev", port: 7331, scanRoot: root,
     categoryDepth: 1, maxDepth: 5, maxEntriesPerProject: 5000,
-    ignore: ["node_modules", ".git", "dist", "build"], laragonRoot: path.join(root, "no-laragon"), editor: "auto"
+    ignore: ["node_modules", ".git", "dist", "build"], stack: "none",
+    laragonRoot: path.join(root, "no-laragon"), herdRoot: path.join(root, "no-herd"), editor: "auto", terminal: "auto"
   };
 }
 
-test("findet Package-Scripts und Windows-Starter rekursiv", async () => {
+const isWindows = process.platform === "win32";
+
+test("findet Package-Scripts und Startdateien der eigenen Plattform rekursiv", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "devhub-scan-"));
   try {
     const project = path.join(root, "Kundenportal");
@@ -25,7 +28,9 @@ test("findet Package-Scripts und Windows-Starter rekursiv", async () => {
       packageManager: "pnpm@10.0.0",
       scripts: { dev: "vite", build: "vite build", "dev:mock": "vite --mode mock" }
     }));
+    // Beide Startdateien liegen im Projekt, sichtbar wird nur die zur laufenden Plattform passende.
     await writeFile(path.join(project, "start.bat"), "@echo off\r\n");
+    await writeFile(path.join(project, "start.sh"), "#!/bin/sh\necho dev\n");
     await mkdir(path.join(project, "node_modules", "ignored"), { recursive: true });
     await writeFile(path.join(project, "node_modules", "ignored", "package.json"), JSON.stringify({ scripts: { dev: "ignored" } }));
 
@@ -38,8 +43,11 @@ test("findet Package-Scripts und Windows-Starter rekursiv", async () => {
     assert.deepEqual(projects[0].launchers.map((launcher) => launcher.command), [
       "pnpm run dev",
       "pnpm run dev:mock",
-      '"start.bat"'
+      isWindows ? '"start.bat"' : 'sh "start.sh"'
     ]);
+    const starter = projects[0].launchers.find((launcher) => launcher.kind !== "package-script")!;
+    assert.equal(starter.kind, isWindows ? "batch" : "shell");
+    if (!isWindows) assert.equal(starter.executable, "/bin/sh");
     assert.equal(projects[0].launchers.filter((launcher) => launcher.kind === "package-script").length, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -102,6 +110,7 @@ test("erkennt reine HTML- und PHP-Projekte mit abgeleiteten Metadaten", async ()
     assert.equal(php.description, "API für das Kundenportal");
     assert.ok(php.technologies.includes("Laravel"));
     assert.equal(php.launchers.at(-1)?.kind, "php-server");
+    assert.equal(php.launchers.at(-1)?.executable, isWindows ? "php.exe" : "php");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -184,7 +193,7 @@ test("verlinkt Projekte unterhalb des Apache-DocumentRoot direkt über localhost
     await writeFile(path.join(root, "projects", "spa", "index.html"), '<!doctype html><script type="module" src="/src/main.tsx"></script>');
     await writeFile(path.join(root, "projects", "spa", "package.json"), JSON.stringify({ dependencies: { vite: "^7" }, scripts: { dev: "vite" } }));
 
-    const projects = await scanWorkspace({ ...testConfig(root), laragonRoot }, path.join(root, "devhub"));
+    const projects = await scanWorkspace({ ...testConfig(root), stack: "laragon", laragonRoot }, path.join(root, "devhub"));
     const byPath = new Map(projects.map((project) => [project.relativePath, project]));
 
     // Ein tiefer liegendes Unterwerkzeug darf die Startseite des Projekts nicht verdrängen.
@@ -271,7 +280,7 @@ test("ignoriert Virtual Hosts, deren DocumentRoot nichts ausliefern kann", async
         `<VirtualHost *:80>\n  DocumentRoot "${documentRoot.split(path.sep).join("/")}"\n  ServerName ${name}.test\n</VirtualHost>\n`);
     }
 
-    const projects = await scanWorkspace({ ...testConfig(root), categoryDepth: 3, laragonRoot }, path.join(root, "devhub"));
+    const projects = await scanWorkspace({ ...testConfig(root), categoryDepth: 3, stack: "laragon", laragonRoot }, path.join(root, "devhub"));
     const byPath = new Map(projects.map((project) => [project.relativePath, project]));
 
     assert.equal(byPath.get("projects/nerdbattle")?.defaultUrl, null);
@@ -281,7 +290,7 @@ test("ignoriert Virtual Hosts, deren DocumentRoot nichts ausliefern kann", async
     // Fertiges HTML mit Tailwind-Setup daneben bleibt auslieferbar - nur src/ macht daraus Quellcode.
     await writeFile(path.join(root, "projects", "ante-up", "package.json"), JSON.stringify({ scripts: { build: "tailwindcss" } }));
     await rm(path.join(root, "projects", "ante-up", "src"), { recursive: true, force: true });
-    const rescanned = await scanWorkspace({ ...testConfig(root), categoryDepth: 3, laragonRoot }, path.join(root, "devhub"));
+    const rescanned = await scanWorkspace({ ...testConfig(root), categoryDepth: 3, stack: "laragon", laragonRoot }, path.join(root, "devhub"));
     assert.equal(rescanned.find((project) => project.relativePath === "projects/ante-up")?.defaultUrl, "http://ante-up.test/");
   } finally {
     await rm(root, { recursive: true, force: true });

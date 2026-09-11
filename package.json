@@ -1,13 +1,16 @@
 {
   "name": "devhub-node",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Local project launcher and development dashboard",
+  "description": "Local project launcher and development dashboard for Windows, macOS and Linux",
   "type": "module",
   "scripts": {
+    "setup": "tsx src/setup.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "autostart:install": "tsx src/autostart-cli.ts install",
+    "autostart:uninstall": "tsx src/autostart-cli.ts uninstall",
     "prewindows:install": "npm run build",
     "windows:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows-autostart.ps1",
     "windows:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-windows-autostart.ps1",
@@ -22,5 +25,8 @@
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "^7.3.1"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

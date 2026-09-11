@@ -13,9 +13,10 @@ const execFileAsync = promisify(execFile);
 
 function testConfig(root: string): AppConfig {
   return {
-    host: "127.0.0.1", publicHost: "devhub", autostartMode: "dev", port: 7331,
-    scanRoot: root, maxDepth: 5, maxEntriesPerProject: 5000,
-    ignore: ["node_modules", ".git", "dist", "build"], laragonRoot: path.join(root, "no-laragon"), editor: "auto"
+    host: "127.0.0.1", publicHost: "devhub", publicUrl: null, autostartMode: "dev", port: 7331,
+    scanRoot: root, categoryDepth: 3, maxDepth: 5, maxEntriesPerProject: 5000,
+    ignore: ["node_modules", ".git", "dist", "build"], stack: "none",
+    laragonRoot: path.join(root, "no-laragon"), herdRoot: path.join(root, "no-herd"), editor: "auto", terminal: "auto"
   };
 }
 

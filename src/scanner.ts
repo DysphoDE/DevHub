@@ -4,21 +4,26 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { AppConfig, GitInfo, LauncherDefinition, LauncherKind, ProjectDefinition } from "./types.js";
+import { isWindows } from "./platform.js";
+import { resolveStack } from "./stack-registry.js";
+import type { AppConfig, GitInfo, LauncherDefinition, LauncherKind, ProjectDefinition, StackWebInfo } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const packageScriptPattern = /^(dev|start|serve|preview)(:|$)/i;
+// Startdateien je Plattform: Batch und CMD laufen nur unter Windows, Shell-Skripte nur auf Unix-Systemen.
 const starterFiles = new Map<string, LauncherKind>([
   ["start.bat", "batch"],
   ["start.cmd", "command"],
-  ["start.ps1", "powershell"]
+  ["start.ps1", "powershell"],
+  ["start.sh", "shell"]
 ]);
+const platformStarterKinds = new Set<LauncherKind>(isWindows ? ["batch", "command", "powershell"] : ["powershell", "shell"]);
 const thumbnailNames = new Set(["thumbnail.jpg", "thumbnail.jpeg", "thumbnail.png", "thumbnail.webp", "thumbnail.gif"]);
 // Manifeste und Konfigurationen, die einen Ordner zweifelsfrei zu einem Projekt machen.
 const projectManifestFiles = new Set([
   "package.json", "composer.json", "project.ini", "requirements.txt", "pyproject.toml", "cargo.toml",
   "go.mod", "gemfile", "dockerfile", "docker-compose.yml", "compose.yml", "manifest.json", "makefile",
-  "start.bat", "start.cmd", "start.ps1", ".env", ".env.example", "tsconfig.json"
+  "start.bat", "start.cmd", "start.ps1", "start.sh", ".env", ".env.example", "tsconfig.json"
 ]);
 // Endungen, die echten Quellcode bedeuten. Bewusst ohne .html/.css/.md: Ein Ordner voller
 // exportierter Dokumente (F:\clients\<kunde>\uebergabe) ist kein Projekt, sondern Ablage.
@@ -64,8 +69,7 @@ interface MetadataCandidate {
 
 interface WorkspaceWebInfo {
   documentRoot: string | null;
-  virtualHostCount: number;
-  hosts: Array<{ documentRoot: string; serverName: string; servable: boolean }>;
+  hosts: Array<{ documentRoot: string; serverName: string; url: string; servable: boolean }>;
 }
 
 interface DiscoveredProject {
@@ -221,29 +225,19 @@ async function isServableDocumentRoot(documentRoot: string): Promise<boolean> {
   return !(files.has("package.json") && hasSourceDirectory);
 }
 
+// Der Stack (Laragon, Herd, Valet) kennt seine lokalen Domains; der Scanner prüft nur noch,
+// ob deren DocumentRoot tatsächlich etwas ausliefert.
 async function readWorkspaceWebInfo(config: AppConfig): Promise<WorkspaceWebInfo> {
-  const result: WorkspaceWebInfo = { documentRoot: null, virtualHostCount: 0, hosts: [] };
-  const ini = await readText(path.join(config.laragonRoot, "usr", "laragon.ini"), 128_000);
-  const apacheSection = ini.match(/\[apache\]([\s\S]*?)(?=\r?\n\[|$)/i)?.[1] ?? "";
-  result.documentRoot = apacheSection.match(/^DocumentRoot\s*=\s*(.+)$/im)?.[1]?.trim() ?? null;
-
-  const sitesDirectory = path.join(config.laragonRoot, "etc", "apache2", "sites-enabled");
+  let info: StackWebInfo = { documentRoot: null, sites: [] };
   try {
-    const files = (await readdir(sitesDirectory, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".conf"));
-    result.virtualHostCount = files.filter((entry) => entry.name.toLowerCase().startsWith("auto.")).length;
-    for (const file of files) {
-      const contents = await readText(path.join(sitesDirectory, file.name), 64_000);
-      const documentRoot = contents.match(/^\s*DocumentRoot\s+["']?([^"'\r\n]+)["']?/im)?.[1]?.trim();
-      const serverName = contents.match(/^\s*ServerName\s+([^\s#]+)/im)?.[1]?.trim();
-      if (!documentRoot || !serverName) continue;
-      const resolvedRoot = path.resolve(documentRoot);
-      result.hosts.push({ documentRoot: resolvedRoot, serverName, servable: await isServableDocumentRoot(resolvedRoot) });
-    }
+    info = await (await resolveStack(config)).readWebInfo(config);
   } catch {
-    // Laragon or its Apache configuration is optional.
+    // Der Stack ist optional; ohne ihn gibt es keine lokalen Domains.
   }
-  return result;
+  const hosts = await Promise.all(info.sites.map(async (site) => ({
+    documentRoot: site.documentRoot, serverName: site.serverName, url: site.url, servable: await isServableDocumentRoot(site.documentRoot)
+  })));
+  return { documentRoot: info.documentRoot, hosts };
 }
 
 async function detectPackageManager(packageDirectory: string, projectPath: string, packageManagerField?: string): Promise<"npm" | "pnpm" | "yarn" | "bun"> {
@@ -268,7 +262,7 @@ async function detectPackageManager(packageDirectory: string, projectPath: strin
 function packageCommand(manager: "npm" | "pnpm" | "yarn" | "bun", script: string): { executable: string; args: string[]; display: string } {
   const managerArgs = manager === "yarn" ? [script] : ["run", script];
   const display = [manager, ...managerArgs].join(" ");
-  if (process.platform === "win32") {
+  if (isWindows) {
     return {
       executable: process.env.ComSpec ?? "cmd.exe",
       args: ["/d", "/s", "/c", [`${manager}.cmd`, ...managerArgs].join(" ")],
@@ -282,12 +276,16 @@ function fileCommand(kind: LauncherKind, filePath: string): { executable: string
   const quotedName = `"${path.basename(filePath)}"`;
   if (kind === "powershell") {
     return {
-      executable: process.platform === "win32" ? "powershell.exe" : "pwsh",
+      executable: isWindows ? "powershell.exe" : "pwsh",
       args: ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", filePath],
       display: `powershell -File ${quotedName}`
     };
   }
-  if (process.platform === "win32") {
+  if (kind === "shell") {
+    // Über die Shell gestartet, damit ein fehlendes Ausführungsrecht nicht im Weg steht.
+    return { executable: "/bin/sh", args: [filePath], display: `sh ${quotedName}` };
+  }
+  if (isWindows) {
     return {
       executable: process.env.ComSpec ?? "cmd.exe",
       args: ["/d", "/s", "/c", `call "${filePath}"`],
@@ -441,7 +439,7 @@ async function scanEvidence(projectPath: string, config: AppConfig, ownAppPath: 
       if ((lowerName.endsWith(".html") || lowerName.endsWith(".htm")) && current.depth <= 2) evidence.htmlEntries.push(absolutePath);
       if (lowerName === "index.php") evidence.phpEntries.push(absolutePath);
       const starterKind = starterFiles.get(lowerName);
-      if (starterKind) evidence.starterPaths.push({ path: absolutePath, kind: starterKind });
+      if (starterKind && platformStarterKinds.has(starterKind)) evidence.starterPaths.push({ path: absolutePath, kind: starterKind });
       if (!evidence.thumbnailPath && thumbnailNames.has(lowerName) && current.depth <= 1) evidence.thumbnailPath = absolutePath;
       if (evidence.fileCount >= config.maxEntriesPerProject) { evidence.truncated = true; break; }
     }
@@ -578,7 +576,7 @@ function urlForProject(projectPath: string, servableRoot: string | null, metadat
   // Nur Virtual Hosts, deren DocumentRoot tatsächlich etwas ausliefert – sonst führt der grüne
   // Button auf ein Verzeichnis-Listing oder eine kaputte Rohfassung.
   const host = webInfo.hosts.find((candidate) => candidate.servable && pathStartsWith(candidate.documentRoot, projectPath));
-  if (host) return `http://${host.serverName}/`;
+  if (host) return host.url;
   if (!servableRoot || !webInfo.documentRoot || !pathStartsWith(servableRoot, webInfo.documentRoot)) return null;
   const relative = path.relative(webInfo.documentRoot, servableRoot).split(path.sep).map(encodeURIComponent).join("/");
   return relative ? `http://localhost/${relative}/` : "http://localhost/";
@@ -680,7 +678,7 @@ async function scanProject(discovered: DiscoveredProject, config: AppConfig, own
     launchers.push({
       id: stableId(`${projectId}:php-preview:${webRoot}`), projectId, name: "PHP-Vorschau", kind: "php-server",
       relativeCwd: toPosix(path.relative(projectPath, webRoot)) || ".", command: "php -S 127.0.0.1:{port}",
-      cwd: webRoot, executable: "php.exe", args: ["-S", "127.0.0.1:{port}", "-t", webRoot], dynamicPort: true,
+      cwd: webRoot, executable: isWindows ? "php.exe" : "php", args: ["-S", "127.0.0.1:{port}", "-t", webRoot], dynamicPort: true,
       preferred: !hasPreferredLauncher
     });
   } else if (preferredHtmlEntry && webRoot && !validPackages.length) {
@@ -708,7 +706,8 @@ async function scanProject(discovered: DiscoveredProject, config: AppConfig, own
     modifiedAt: new Date(evidence.maxModifiedMs || Date.now()).toISOString(),
     technologies: sortedTechnologies.length ? sortedTechnologies : ["Projektordner"],
     kind: sortedTechnologies[0] ?? "Projektordner",
-    defaultUrl: urlForProject(projectPath, apacheServableRoot, metadata.url, webInfo),
+    // DevHub selbst ist ein Node-Server: Die Domain des Stacks würde nur seine rohen Dateien zeigen.
+    defaultUrl: isOwnApp ? null : urlForProject(projectPath, apacheServableRoot, metadata.url, webInfo),
     webRoot,
     git: await readGitInfo(evidence.gitRoot, projectPath),
     fileCount: evidence.fileCount,

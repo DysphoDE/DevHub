@@ -2,9 +2,7 @@ node_modules/
 dist/
 .devhub/
 devhub.config.json
-test-results/
-__pycache__/
-*.pyc
+*.tmp
 
 # IDE / Editor
 .idea/

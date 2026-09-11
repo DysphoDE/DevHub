@@ -1,6 +1,7 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { moveToTrash, trashSupport } from "./platform.js";
 import type { ProjectDefinition } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -144,7 +145,8 @@ export async function readGitBranches(project: ProjectDefinition): Promise<GitBr
   });
 }
 
-// Untracked Dateien landen unter Windows im Papierkorb statt endgültig gelöscht zu werden (git clean).
+// Untracked Dateien landen im Papierkorb des Systems statt endgültig gelöscht zu werden (git clean).
+// Nur wo es keinen Papierkorb gibt (Linux ohne gio), wird endgültig gelöscht – die UI sagt das vorher an.
 async function moveUntrackedToRecycleBin(repository: string, relativePaths: string[]): Promise<string> {
   if (!relativePaths.length) return "";
   const absolutePaths = relativePaths.map((relative) => {
@@ -154,38 +156,16 @@ async function moveUntrackedToRecycleBin(repository: string, relativePaths: stri
     }
     return resolved;
   });
-  if (process.platform !== "win32") {
+  const trash = await trashSupport();
+  if (!trash.available) {
     await git(repository, ["clean", "-f", "-d", "--", ...relativePaths]);
-    return "";
+    return " Neue Dateien wurden endgültig gelöscht.";
   }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "Add-Type -AssemblyName Microsoft.VisualBasic",
-    "$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)",
-    "$paths = $reader.ReadToEnd() -split \"`n\"",
-    "foreach ($p in $paths) {",
-    "  $p = $p.Trim()",
-    "  if ($p.Length -eq 0) { continue }",
-    "  if (Test-Path -LiteralPath $p -PathType Container) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }",
-    "  elseif (Test-Path -LiteralPath $p) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }",
-    "}"
-  ].join("\n");
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
-      windowsHide: true,
-      stdio: ["pipe", "ignore", "pipe"]
-    });
-    let stderr = "";
-    const timer = setTimeout(() => child.kill(), 60_000);
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => { clearTimeout(timer); reject(error); });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error(`Neue Dateien konnten nicht in den Papierkorb verschoben werden. ${stderr.trim().split(/\r?\n/)[0] || ""}`.trim()));
-    });
-    child.stdin.end(absolutePaths.join("\n"), "utf8");
-  });
+  try {
+    await moveToTrash(absolutePaths);
+  } catch (error) {
+    throw new Error(`Neue Dateien konnten nicht in den Papierkorb verschoben werden. ${error instanceof Error ? error.message : ""}`.trim());
+  }
   return " Neue Dateien wurden in den Papierkorb verschoben.";
 }
 

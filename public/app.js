@@ -4,7 +4,7 @@ const state = {
   token: "",
   root: "",
   projects: [],
-  laragon: null,
+  stack: null,
   capabilities: null,
   page: location.hash === "#git" ? "git" : "projects",
   filter: "all",
@@ -59,9 +59,11 @@ const elements = {
   techFilters: document.querySelector("#tech-filters"), mobileTech: document.querySelector("#mobile-tech"), clearTech: document.querySelector("#clear-tech"), activeFilter: document.querySelector("#active-filter"),
   categoryGroup: document.querySelector("#category-group"), categoryFilters: document.querySelector("#category-filters"),
   mobileCategory: document.querySelector("#mobile-category"), clearCategory: document.querySelector("#clear-category"),
-  laragonState: document.querySelector("#laragon-state"), webState: document.querySelector("#web-state"), databaseState: document.querySelector("#database-state"),
-  serviceSummary: document.querySelector("#service-summary"), runtimePorts: document.querySelector("#runtime-ports"), laragonToggle: document.querySelector("#laragon-toggle"), laragonToggleLabel: document.querySelector("#laragon-toggle-label"),
-  laragonOpen: document.querySelector("#laragon-open"), laragonOpenLabel: document.querySelector("#laragon-open-label"), laragonReload: document.querySelector("#laragon-reload"),
+  stackName: document.querySelector("#stack-name"), stackState: document.querySelector("#stack-state"), webState: document.querySelector("#web-state"), databaseState: document.querySelector("#database-state"),
+  serviceSummary: document.querySelector("#service-summary"), runtimePorts: document.querySelector("#runtime-ports"), stackActions: document.querySelector("#stack-actions"),
+  stackToggle: document.querySelector("#stack-toggle"), stackToggleLabel: document.querySelector("#stack-toggle-label"),
+  stackOpen: document.querySelector("#stack-open"), stackOpenLabel: document.querySelector("#stack-open-label"), stackReload: document.querySelector("#stack-reload"), stackReloadLabel: document.querySelector("#stack-reload-label"),
+  discardDescription: document.querySelector("#git-discard-description"), discardWarning: document.querySelector("#git-discard-warning-text"),
   serviceDock: document.querySelector("#service-dock"), runtimeDetails: document.querySelector("#runtime-details"), runtimeTopology: document.querySelector("#runtime-topology"),
   projectDialog: document.querySelector("#project-dialog"), projectDialogContent: document.querySelector("#project-dialog-content"),
   discardDialog: document.querySelector("#git-discard-dialog"), discardCount: document.querySelector("#git-discard-count"), discardFiles: document.querySelector("#git-discard-files"),
@@ -181,7 +183,7 @@ function runningBrowserUrl(project) {
 }
 
 function browserUrl(project) {
-  return runningBrowserUrl(project) || (state.laragon?.webServer ? project.defaultUrl : null);
+  return runningBrowserUrl(project) || (state.stack?.webServer ? project.defaultUrl : null);
 }
 
 function markRecent(projectId) {
@@ -1019,8 +1021,8 @@ function openProjectDetails(projectId) {
 
 function renderRuntimeTopology() {
   const routes = [];
-  if (state.laragon?.webServer) {
-    routes.push(`<div class="topology-route system-route"><span class="topology-source"><i></i>${escapeHtml(state.laragon.webServer)}</span><span class="topology-line"></span><strong>${state.laragon.virtualHosts} lokale Domains</strong><code>:80</code></div>`);
+  if (state.stack?.webServer) {
+    routes.push(`<div class="topology-route system-route"><span class="topology-source"><i></i>${escapeHtml(state.stack.webServer)}</span><span class="topology-line"></span><strong>${state.stack.sites} lokale Domains</strong><code>:80</code></div>`);
   }
   state.projects.forEach((project) => project.launchers
     .filter((launcher) => launcher.runtime.status === "running")
@@ -1077,27 +1079,45 @@ function renderTechFilters() {
   elements.clearTech.hidden = !state.technology;
 }
 
+function stackAction(id) {
+  return state.stack?.actions?.find((action) => action.id === id) || null;
+}
+
 function renderServiceDock() {
-  const laragon = state.laragon;
-  if (!laragon) return;
+  const stack = state.stack;
+  if (!stack) return;
   const runtimeErrors = state.projects.flatMap((project) => project.launchers).filter((launcher) => launcher.runtime.status === "error").length;
   if (runtimeErrors) state.runtimeExpanded = true;
-  const nodes = { laragon: laragon.appRunning, web: Boolean(laragon.webServer), database: Boolean(laragon.database) };
+  const nodes = { stack: stack.appRunning, web: Boolean(stack.webServer), database: Boolean(stack.database) };
   Object.entries(nodes).forEach(([service, online]) => document.querySelector(`[data-service="${service}"]`)?.classList.toggle("online", online));
-  elements.laragonState.textContent = !laragon.installed ? "fehlt" : laragon.appRunning ? "geöffnet" : "bereit";
-  elements.webState.textContent = laragon.webServer || "offline";
-  elements.databaseState.textContent = laragon.database || "offline";
-  elements.serviceSummary.textContent = laragon.webServer
-    ? `${laragon.webServer} versorgt ${laragon.virtualHosts} lokale Domains`
-    : laragon.appRunning ? "Laragon ist offen · Dienste warten auf Start" : "Laragon ist bereit, aber noch geschlossen";
-  elements.laragonOpenLabel.textContent = laragon.appRunning ? "Zu Laragon" : "Laragon öffnen";
-  elements.laragonOpen.disabled = !laragon.installed;
-  elements.laragonReload.disabled = !laragon.installed;
+  elements.stackName.textContent = stack.name;
+  elements.stackState.textContent = !stack.installed ? "fehlt" : stack.appRunning ? "geöffnet" : "bereit";
+  elements.webState.textContent = stack.webServer || "offline";
+  elements.databaseState.textContent = stack.database || "offline";
+  elements.serviceSummary.textContent = stack.webServer
+    ? `${stack.webServer} versorgt ${stack.sites} lokale Domain${stack.sites === 1 ? "" : "s"}`
+    : !stack.installed ? "Kein lokaler Stack erkannt · Laragon, Herd oder Valet einrichten"
+    : stack.appRunning ? `${stack.name} ist offen · Dienste warten auf Start` : `${stack.name} ist bereit, aber noch geschlossen`;
   const webRunning = webOnline();
-  elements.laragonToggle.disabled = !laragon.installed;
-  elements.laragonToggleLabel.textContent = webRunning ? "Apache stoppen" : "Apache starten";
-  elements.laragonToggle.classList.toggle("online", webRunning);
-  elements.laragonToggle.classList.toggle("offline", !webRunning);
+  const startAction = stackAction("start");
+  const stopAction = stackAction("stop");
+  const openAction = stackAction("open");
+  const reloadAction = stackAction("reload");
+  elements.stackActions.hidden = !stack.installed || !stack.actions?.length;
+  elements.stackToggle.hidden = !(startAction || stopAction);
+  elements.stackToggle.disabled = !stack.installed || (webRunning ? !stopAction : !startAction);
+  elements.stackToggleLabel.textContent = webRunning ? (stopAction?.label || `${stack.webServerName} stoppen`) : (startAction?.label || `${stack.webServerName} starten`);
+  elements.stackToggle.title = (webRunning ? stopAction : startAction)?.description || "";
+  elements.stackToggle.classList.toggle("online", webRunning);
+  elements.stackToggle.classList.toggle("offline", !webRunning);
+  elements.stackOpen.hidden = !openAction;
+  elements.stackOpen.disabled = !stack.installed;
+  elements.stackOpenLabel.textContent = stack.appRunning ? `Zu ${stack.name}` : openAction?.label || `${stack.name} öffnen`;
+  elements.stackOpen.title = openAction?.description || "";
+  elements.stackReload.hidden = !reloadAction;
+  elements.stackReload.disabled = !stack.installed;
+  elements.stackReloadLabel.textContent = reloadAction?.label || "Neu laden";
+  elements.stackReload.title = reloadAction?.description || "";
   const runningUrls = state.projects.flatMap((project) => project.launchers)
     .filter((launcher) => launcher.runtime.status === "running" && launcher.runtime.url)
     .map((launcher) => launcher.runtime.url);
@@ -1258,14 +1278,15 @@ async function api(path, options = {}) {
 async function bootstrap() {
   try {
     const data = await api("/api/bootstrap");
-    Object.assign(state, { token: data.token, projects: data.projects, laragon: data.laragon, capabilities: data.capabilities });
+    Object.assign(state, { token: data.token, projects: data.projects, stack: data.stack, capabilities: data.capabilities });
+    applyTrashCapability();
     setWorkspaceRoot(data.root);
     elements.workspaceBrowse.hidden = !data.capabilities.folderPicker;
     elements.sort.value = state.sort;
     render(false);
     loadActiveGitSurface();
     setTimeout(connectEvents, 1000);
-    setInterval(refreshLaragon, 8000);
+    setInterval(refreshStack, 8000);
   } catch (error) {
     elements.scanStatus.textContent = "Verbindung fehlgeschlagen";
     toast(error.message, "error");
@@ -1353,26 +1374,39 @@ async function saveWorkspace(event) {
   }
 }
 
-async function refreshLaragon() {
-  try { state.laragon = (await api("/api/laragon/status")).laragon; renderServiceDock(); } catch { /* next poll retries */ }
+async function refreshStack() {
+  try { state.stack = (await api("/api/stack/status")).stack; renderServiceDock(); } catch { /* next poll retries */ }
 }
 
 function webOnline() {
-  return Boolean(state.laragon?.webServer);
+  return Boolean(state.stack?.webServer);
 }
 
-async function laragonAction(action) {
+// Die Texte des Verwerfen-Dialogs hängen davon ab, ob das System einen Papierkorb anbietet.
+function applyTrashCapability() {
+  const trash = state.capabilities?.trash;
+  if (!elements.discardDescription || !elements.discardWarning) return;
+  if (trash?.available) {
+    elements.discardDescription.textContent = `Die ausgewählten Dateien werden auf ihren letzten Commit-Stand zurückgesetzt. Neue Dateien werden in den ${trash.name} verschoben.`;
+    elements.discardWarning.textContent = `Das Zurücksetzen geänderter Dateien lässt sich nicht rückgängig machen. Neue Dateien kannst du aus dem ${trash.name} wiederherstellen.`;
+  } else {
+    elements.discardDescription.textContent = "Die ausgewählten Dateien werden auf ihren letzten Commit-Stand zurückgesetzt. Neue Dateien werden endgültig gelöscht, weil dieses System keinen Papierkorb anbietet.";
+    elements.discardWarning.textContent = "Dieser Schritt lässt sich nicht rückgängig machen – weder für geänderte noch für neue Dateien.";
+  }
+}
+
+async function runStackAction(action) {
   const pending = action === "start" || action === "stop";
-  if (pending) elements.laragonToggle.disabled = true;
+  if (pending) elements.stackToggle.disabled = true;
   try {
-    const data = await api(`/api/laragon/${action}`, { method: "POST" });
-    state.laragon = data.laragon;
+    const data = await api(`/api/stack/${action}`, { method: "POST" });
+    state.stack = data.stack;
     renderServiceDock();
     toast(data.message);
     if (action === "reload") setTimeout(rescan, 1100);
-    if (pending) setTimeout(refreshLaragon, 2500);
+    if (pending) setTimeout(refreshStack, 2500);
   } catch (error) { toast(error.message, "error"); }
-  finally { if (pending) elements.laragonToggle.disabled = false; }
+  finally { if (pending) elements.stackToggle.disabled = false; }
 }
 
 async function runProjectAction(projectId, action) {
@@ -1774,8 +1808,8 @@ elements.workspaceForm.addEventListener("submit", saveWorkspace);
 document.querySelector("#workspace-close").addEventListener("click", () => elements.workspaceDialog.close());
 document.querySelector("#workspace-cancel").addEventListener("click", () => elements.workspaceDialog.close());
 elements.workspaceDialog.addEventListener("click", (event) => { if (event.target === elements.workspaceDialog) elements.workspaceDialog.close(); });
-elements.laragonToggle.addEventListener("click", () => laragonAction(webOnline() ? "stop" : "start"));
-elements.laragonOpen.addEventListener("click", () => laragonAction("open")); elements.laragonReload.addEventListener("click", () => laragonAction("reload"));
+elements.stackToggle.addEventListener("click", () => runStackAction(webOnline() ? "stop" : "start"));
+elements.stackOpen.addEventListener("click", () => runStackAction("open")); elements.stackReload.addEventListener("click", () => runStackAction("reload"));
 elements.runtimeDetails.addEventListener("click", () => {
   state.runtimeExpanded = !state.runtimeExpanded;
   localStorage.setItem("devhub_runtime_expanded", String(state.runtimeExpanded));

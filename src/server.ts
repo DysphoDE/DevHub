@@ -6,9 +6,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, getAppDirectory, saveScanRoot } from "./config.js";
 import { readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
-import { getLaragonStatus, runLaragonAction, type LaragonAction } from "./laragon.js";
 import { ProcessManager } from "./process-manager.js";
 import { readGitInfo, scanWorkspace } from "./scanner.js";
+import { isStackAction } from "./stack.js";
+import { resolveStack } from "./stack-registry.js";
 import { chooseWorkspaceDirectory, getSystemCapabilities, runProjectAction } from "./system-actions.js";
 import type { ProjectDefinition, PublicProject } from "./types.js";
 
@@ -18,6 +19,11 @@ const fontAwesomeDirectory = path.resolve(sourceDirectory, "../node_modules/@for
 const config = await loadConfig();
 const processManager = new ProcessManager();
 const capabilities = await getSystemCapabilities(config);
+const publicUrl = config.publicUrl ?? `http://${config.publicHost}:${config.port}`;
+
+async function stackStatus() {
+  return (await resolveStack(config)).getStatus(config);
+}
 const csrfToken = randomBytes(24).toString("base64url");
 let projects: ProjectDefinition[] = [];
 let scanning = false;
@@ -31,7 +37,7 @@ function isLoopback(address?: string): boolean {
 
 // Schutz vor DNS-Rebinding: Anfragen müssen mit einem bekannten Hostnamen adressiert sein,
 // sonst könnte eine fremde Domain, die auf 127.0.0.1 auflöst, die API aus dem Browser lesen.
-const allowedHostNames = new Set(["localhost", "127.0.0.1", "::1", config.host.toLowerCase(), config.publicHost.toLowerCase()]);
+const allowedHostNames = new Set(["localhost", "127.0.0.1", "::1", config.host.toLowerCase(), config.publicHost.toLowerCase(), new URL(publicUrl).hostname.toLowerCase()]);
 
 function isAllowedHost(hostHeader?: string): boolean {
   if (!hostHeader) return false;
@@ -255,10 +261,10 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         token: csrfToken,
         root: config.scanRoot,
-        publicUrl: `http://${config.publicHost}:${config.port}`,
+        publicUrl,
         projects: publicProjects(),
         capabilities,
-        laragon: await getLaragonStatus(config),
+        stack: await stackStatus(),
         scanning
       });
       return;
@@ -276,8 +282,8 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && pathname === "/api/laragon/status") {
-      sendJson(response, 200, { laragon: await getLaragonStatus(config) });
+    if (request.method === "GET" && pathname === "/api/stack/status") {
+      sendJson(response, 200, { stack: await stackStatus() });
       return;
     }
 
@@ -450,11 +456,17 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const laragonActionMatch = pathname.match(/^\/api\/laragon\/(open|start|stop|reload|reload-apache|reload-nginx)$/);
-    if (request.method === "POST" && laragonActionMatch) {
+    const stackActionMatch = pathname.match(/^\/api\/stack\/([a-z-]+)$/);
+    if (request.method === "POST" && stackActionMatch && isStackAction(stackActionMatch[1])) {
       if (!requireToken(request, response)) return;
-      const message = await runLaragonAction(config, laragonActionMatch[1] as LaragonAction);
-      sendJson(response, 200, { message, laragon: await getLaragonStatus(config) });
+      const stack = await resolveStack(config);
+      const status = await stack.getStatus(config);
+      if (!status.actions.some((action) => action.id === stackActionMatch[1])) {
+        sendJson(response, 400, { error: `Die Aktion „${stackActionMatch[1]}“ steht für ${status.name} nicht zur Verfügung.` });
+        return;
+      }
+      const message = await stack.runAction(config, stackActionMatch[1]);
+      sendJson(response, 200, { message, stack: await stack.getStatus(config) });
       return;
     }
 
@@ -493,7 +505,7 @@ setInterval(() => {
   if (!workspaceWatcher) scheduleWorkspaceRefresh();
 }, 25_000).unref();
 server.listen(config.port, config.host, () => {
-  console.log(`DevHub Node läuft auf http://${config.publicHost}:${config.port}`);
+  console.log(`DevHub läuft auf ${publicUrl}`);
   console.log(`Lokale Bindung: http://${config.host}:${config.port}`);
   console.log(`Projektwurzel: ${config.scanRoot}`);
 });
@@ -503,6 +515,10 @@ async function shutdown(): Promise<void> {
   workspaceWatcher?.close();
   if (watchDebounce) clearTimeout(watchDebounce);
   await processManager.stopAll();
+  // Offene Event-Streams würden server.close() sonst bis zum Timeout blockieren.
+  for (const client of eventClients) client.end();
+  eventClients.clear();
+  server.closeAllConnections();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 }

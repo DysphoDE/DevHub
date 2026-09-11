@@ -1,7 +1,0 @@
-{
-  "name": "sample-vite",
-  "private": true,
-  "scripts": {
-    "dev": "node server.mjs"
-  }
-}

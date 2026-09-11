@@ -1,10 +1,13 @@
-export type LauncherKind = "package-script" | "batch" | "command" | "powershell" | "static-server" | "php-server";
+export type LauncherKind = "package-script" | "batch" | "command" | "powershell" | "shell" | "static-server" | "php-server";
 export type RuntimeStatus = "stopped" | "starting" | "running" | "stopping" | "error";
 export type AutostartMode = "dev" | "production";
+export type StackProvider = "laragon" | "herd" | "valet" | "none";
+export type StackSelection = "auto" | StackProvider;
 
 export interface AppConfig {
   host: string;
   publicHost: string;
+  publicUrl: string | null;
   autostartMode: AutostartMode;
   port: number;
   scanRoot: string;
@@ -12,8 +15,11 @@ export interface AppConfig {
   maxDepth: number;
   maxEntriesPerProject: number;
   ignore: string[];
+  stack: StackSelection;
   laragonRoot: string;
+  herdRoot: string;
   editor: string;
+  terminal: string;
 }
 
 export interface LauncherDefinition {
@@ -104,19 +110,47 @@ export interface PublicProject extends Omit<ProjectDefinition, "absolutePath" | 
 
 export interface SystemCapabilities {
   platform: NodeJS.Platform;
+  platformName: string;
   editor: { available: boolean; name: string | null };
   terminal: { available: boolean; name: string | null };
   folder: boolean;
   folderPicker: boolean;
+  trash: { available: boolean; name: string | null };
 }
 
-export interface LaragonStatus {
+/** Eine lokale Domain, die der Stack (Laragon, Herd, Valet) ausliefert. */
+export interface StackSite {
+  documentRoot: string;
+  serverName: string;
+  url: string;
+}
+
+export interface StackWebInfo {
+  /** Globales DocumentRoot, unter dem Ordner direkt per Pfad erreichbar sind (Laragon/Apache). */
+  documentRoot: string | null;
+  sites: StackSite[];
+}
+
+export type StackActionId = "open" | "start" | "stop" | "reload";
+
+export interface StackActionDescriptor {
+  id: StackActionId;
+  label: string;
+  description: string;
+}
+
+export interface StackStatus {
+  provider: StackProvider;
+  name: string;
   installed: boolean;
   root: string | null;
   appRunning: boolean;
-  webServer: "Apache" | "Nginx" | null;
-  database: "MySQL" | "MariaDB" | "PostgreSQL" | null;
+  webServerName: string;
+  webServer: string | null;
+  database: string | null;
   mail: boolean;
   documentRoot: string | null;
-  virtualHosts: number;
+  sites: number;
+  tld: string | null;
+  actions: StackActionDescriptor[];
 }

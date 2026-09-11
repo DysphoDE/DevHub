@@ -2,31 +2,31 @@
 
 DevHub is a local dashboard for finding, opening, running, and maintaining the projects on your development machine. Point it at the folder that contains your repositories and it builds a visual workbench from the files that are already there—no per-project registration required.
 
+DevHub runs on **Windows, macOS, and Linux**. It integrates with the local web stack you already use: [Laragon](https://laragon.org/) on Windows, [Herd](https://herd.laravel.com/) on macOS and Windows, or [Laravel Valet](https://laravel.com/docs/valet) on macOS and Linux.
+
 The server binds to your loopback interface by default. Project paths, Git state, process output, and configuration stay on your computer.
 
 ## What it does
 
-- Discovers every direct child of a workspace folder as a project.
+- Discovers every project below a workspace folder, several category levels deep.
 - Watches the workspace and refreshes projects and Git state live over server-sent events—no manual reload, and unchanged cards are left untouched so the UI never flickers.
 - Detects common stacks such as Node.js, React, Vue, Next.js, PHP, Laravel, Symfony, Python, Docker, and static HTML.
-- Creates launch actions from `package.json` scripts, `start.bat`, `start.cmd`, `start.ps1`, static sites, and PHP entry points.
+- Creates launch actions from `package.json` scripts, `start.sh` (macOS/Linux), `start.bat`/`start.cmd` (Windows), `start.ps1`, static sites, and PHP entry points.
 - Starts and stops development processes, assigns free preview ports, and streams their output.
 - Shows Git branch, sync state, changed files, diffs, staging controls, commits, and pushes in one workbench.
-- Opens projects in the file manager, terminal, or a detected editor.
+- Opens projects in the file manager, terminal, or a detected editor on every platform.
 - Supports favorites, recent projects, a context-aware global search (`Ctrl+K`), technology filters, and grid/list views.
 - Includes a workspace-wide Git control center for browsing every repository, exploring the complete commit history and per-commit diffs, selecting and staging files in batches, safely discarding local changes, generating local commit-message suggestions, committing, and syncing without leaving DevHub.
-- Supports switching and creating branches, undoing the last unpushed commit (changes stay staged), and discarding new files to the Windows Recycle Bin instead of deleting them permanently.
-- Integrates with Laragon on Windows, including local virtual hosts and service controls.
-- Can start silently when you sign in to Windows.
+- Supports switching and creating branches, undoing the last unpushed commit (changes stay staged), and moving discarded new files to the system trash (Windows Recycle Bin, macOS Trash, Linux via `gio`) instead of deleting them permanently.
+- Shows the state of your local stack—Laragon, Herd, or Valet—links projects to their local domains (`http://project.test`), and starts, stops, or reloads the web server from the dashboard.
+- Can start silently when you sign in: Task Scheduler on Windows, a LaunchAgent on macOS, a systemd user unit on Linux.
 
 ## Requirements
 
 - [Node.js](https://nodejs.org/) 20 or newer
 - npm
 - Git for repository status and Git actions
-- Windows for Laragon integration and the included scheduled-task installer
-
-The core dashboard also runs on macOS and Linux. Some operating-system actions are currently Windows-specific.
+- Optional: Laragon (Windows), Herd (macOS/Windows), or Valet (macOS/Linux) for local domains and service controls
 
 ## Quick start
 
@@ -34,14 +34,19 @@ The core dashboard also runs on macOS and Linux. Some operating-system actions a
 git clone https://github.com/DysphoDE/DevHub.git
 cd DevHub
 npm install
+npm run setup
 npm run dev
 ```
 
+`npm run setup` is the interactive setup assistant. It detects your operating system, local stack, editor, and terminal, asks for the folder that contains your projects, and writes `devhub.config.json`. It can also install the autostart for your platform and, when Herd is present, expose DevHub at `http://devhub.test`. Pass `--yes` to accept every suggestion without prompts.
+
 Open [http://localhost:7331](http://localhost:7331).
 
-DevHub initially uses the parent folder of the repository as its workspace. Click the workspace path in the top-left corner to choose a different folder. On Windows and macOS you can use the native folder picker; on every platform you can enter an absolute path.
+Without the assistant, DevHub uses the parent folder of the repository as its workspace. Click the workspace path in the top-left corner to choose a different folder. Windows and macOS offer the native folder picker, Linux uses `zenity` or `kdialog` when installed, and every platform accepts an absolute path (a leading `~` is allowed).
 
 The selection is saved in a local `devhub.config.json` file. That file is ignored by Git, so machine-specific paths are never committed.
+
+> Moving between machines? Do not copy `node_modules` from one operating system to another—run `npm install` again on the new machine, since some dependencies contain platform-specific binaries.
 
 ## Workspace layout
 
@@ -52,7 +57,7 @@ Every folder is classified in three steps, which lets projects sit several level
 3. **Code somewhere below** — otherwise the folder is only a project if any source file exists underneath. Folders holding nothing but documents, exports, or images are skipped.
 
 ```text
-F:\
+~/Herd/                       (or F:\ on Windows)
 ├── projects/                ← category
 │   ├── customer-portal/     ← project
 │   └── docs-site/           ← project
@@ -63,7 +68,7 @@ F:\
 │       ├── uebergabe/       ← skipped (PDFs and HTML exports, no code)
 │       └── resources/       ← skipped (images)
 ├── pizza-recipe/            ← project (source files, no category)
-└── projects/devhub/         ← listed for Git and project actions
+└── DevHub/                  ← listed for Git and project actions
 ```
 
 Loose `.html`, `.css`, or `.md` files do not count as source code — otherwise every documentation folder would show up as a project. Conventional subfolder names (`src`, `public`, `assets`, `docs`, …) never become projects of their own.
@@ -74,9 +79,21 @@ Project metadata and launchers may be discovered recursively within each project
 
 ### Browser button
 
-The green *Open in browser* action only appears when a running web server can actually answer. A Laragon virtual host counts only if its `DocumentRoot` holds an `index.php`, or an `index.html` that is not raw source — a bundler config or a `package.json` next to a `src/` directory means the folder still needs a build. Projects that only run through `npm run dev` therefore show their launcher instead of a link that would lead to a directory listing.
+The green *Open in browser* action only appears when a running web server can actually answer. A local domain counts only if its document root holds an `index.php`, or an `index.html` that is not raw source — a bundler config or a `package.json` next to a `src/` directory means the folder still needs a build. Projects that only run through `npm run dev` therefore show their launcher instead of a link that would lead to a directory listing.
 
 When DevHub itself is inside the selected workspace, it remains visible so you can open it and use the Git workbench. Its own launch actions are hidden to prevent starting a second DevHub server on the same port.
+
+## Local stacks
+
+DevHub talks to your local web stack through a small provider model, so the dashboard looks the same everywhere while the commands differ per platform.
+
+| Stack | Platforms | Local domains | Service controls |
+| --- | --- | --- | --- |
+| Laragon | Windows | Apache virtual hosts (`auto.*.conf`) and paths below the Apache `DocumentRoot` | Start/stop Apache, open Laragon, reload virtual hosts |
+| Herd | macOS, Windows | Parked paths and linked sites from Herd's Valet configuration, HTTPS when a certificate exists | `herd start`, `herd stop`, `herd restart`, open Herd |
+| Valet | macOS, Linux | Parked paths and linked sites from `~/.config/valet` | `valet start`, `valet stop`, `valet restart` |
+
+Set `stack` to `auto` (default) to pick whatever is installed—Laragon first on Windows, then Herd, then Valet—or force one of `laragon`, `herd`, `valet`, or `none`.
 
 ## Production mode
 
@@ -91,16 +108,16 @@ The default address is [http://localhost:7331](http://localhost:7331). DevHub on
 
 ## Configuration
 
-Most users only need the workspace control in the UI. For additional settings, copy the example configuration:
-
-```powershell
-Copy-Item devhub.config.example.json devhub.config.json
-```
-
-On macOS or Linux:
+Most users only need `npm run setup` and the workspace control in the UI. For manual changes, copy the example configuration:
 
 ```bash
 cp devhub.config.example.json devhub.config.json
+```
+
+On Windows (PowerShell):
+
+```powershell
+Copy-Item devhub.config.example.json devhub.config.json
 ```
 
 Important options:
@@ -108,14 +125,18 @@ Important options:
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `host` | `127.0.0.1` | Address the local server binds to |
-| `publicHost` | `devhub` | Hostname used by the Windows installer |
+| `publicHost` | `devhub` | Hostname used by the Windows installer and accepted in the `Host` header |
+| `publicUrl` | `null` | Address shown in the UI when DevHub is reachable through a proxy such as `http://devhub.test` |
 | `port` | `7331` | DevHub HTTP port |
-| `scanRoot` | `..` | Workspace containing the project folders |
+| `scanRoot` | `..` | Workspace containing the project folders (`~` is allowed) |
 | `categoryDepth` | `3` | Levels of category folders above the projects (`0` disables grouping) |
 | `maxDepth` | `5` | Maximum metadata scan depth per project |
 | `maxEntriesPerProject` | `15000` | Safety limit for scanned entries |
-| `laragonRoot` | `C:\laragon` | Laragon installation directory |
-| `editor` | `auto` | Editor executable or automatic detection |
+| `stack` | `auto` | `auto`, `laragon`, `herd`, `valet`, or `none` |
+| `laragonRoot` | `C:\laragon` | Laragon installation directory (Windows) |
+| `herdRoot` | platform default | Herd data directory (`~/Library/Application Support/Herd` on macOS, `~/.config/herd` on Windows) |
+| `editor` | `auto` | Editor: command, absolute path, or macOS app name (`Cursor`, `Visual Studio Code`) |
+| `terminal` | `auto` | Terminal: command, absolute path, or macOS app name (`iTerm`, `Terminal`) |
 | `autostartMode` | `dev` | `dev` for the watcher or `production` for the compiled server |
 | `ignore` | `[]` | Additional directory names to ignore |
 
@@ -125,33 +146,26 @@ Environment variables override file configuration:
 - `DEVHUB_PORT`
 - `DEVHUB_HOST`
 - `DEVHUB_PUBLIC_HOST`
+- `DEVHUB_PUBLIC_URL`
+- `DEVHUB_STACK`
 - `DEVHUB_AUTOSTART_MODE`
 
 When `DEVHUB_ROOT` is set, the workspace is intentionally locked and cannot be changed from the UI. Binding to a non-loopback address additionally requires `DEVHUB_ALLOW_REMOTE=1`.
 
-## Windows autostart
+## Autostart
 
-Run the installer from an elevated PowerShell prompt, or accept the UAC prompt it opens:
-
-```powershell
-npm run windows:install
+```bash
+npm run autostart:install
+npm run autostart:uninstall
 ```
 
-The installer:
+The installer picks the mechanism for your platform and writes its output to `.devhub/autostart.log`:
 
-- builds the application;
-- adds the configured `publicHost` to the Windows hosts file;
-- creates the `DevHub Node` scheduled task for the current user;
-- starts DevHub without a visible terminal window; and
-- writes autostart output to `.devhub\autostart.log`.
+- **Windows** — creates the `DevHub Node` scheduled task for the current user, adds the configured `publicHost` to the hosts file, and starts DevHub without a visible terminal window. Requires a UAC confirmation. `npm run windows:install` and `npm run windows:uninstall` remain available as aliases.
+- **macOS** — writes `~/Library/LaunchAgents/de.devhub.node.plist` and loads it with `launchctl`. The agent inherits your current `PATH`, so `npm`, `php`, `git`, and `herd` stay reachable.
+- **Linux** — writes `~/.config/systemd/user/devhub.service` and enables it with `systemctl --user`.
 
-After installation, the default configuration is available at [http://devhub:7331](http://devhub:7331).
-
-Remove the task and managed hosts entry with:
-
-```powershell
-npm run windows:uninstall
-```
+With Herd, the setup assistant can additionally run `herd proxy devhub http://127.0.0.1:7331`, which makes DevHub available at `http://devhub.test` without touching the hosts file.
 
 ## Project discovery
 
@@ -162,7 +176,7 @@ DevHub uses existing project files instead of a central registry. Among other si
 - Git metadata;
 - README headings and descriptions;
 - HTML and PHP entry points;
-- `start.bat`, `start.cmd`, and `start.ps1`; and
+- `start.sh`, `start.bat`, `start.cmd`, and `start.ps1`; and
 - optional `thumbnail.jpg`, `thumbnail.png`, `thumbnail.webp`, or `thumbnail.gif` files.
 
 Only scripts and files inside the selected workspace are considered. Launch actions still execute local code with your user permissions, so only start projects you trust.
@@ -181,9 +195,11 @@ Repository structure:
 ```text
 public/      Browser UI (HTML, CSS, JavaScript)
 runtime/     Static preview server
-scripts/     Windows autostart helpers
-src/         TypeScript server, scanner, Git, and process management
-tests/       Scanner, configuration, Git, and process tests
+scripts/     Windows autostart helpers (PowerShell)
+src/         TypeScript server, scanner, Git, process management,
+             stack providers (laragon.ts, herd.ts), platform helpers,
+             setup assistant, and autostart installers
+tests/       Scanner, configuration, Git, process, stack, and setup tests
 ```
 
 ## Security model

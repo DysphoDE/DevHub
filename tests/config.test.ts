@@ -11,13 +11,18 @@ function testConfig(scanRoot: string): AppConfig {
     host: "127.0.0.1",
     publicHost: "devhub",
     autostartMode: "dev",
+    publicUrl: null,
     port: 7331,
     scanRoot,
+    categoryDepth: 3,
     maxDepth: 5,
     maxEntriesPerProject: 5000,
     ignore: [],
+    stack: "none",
     laragonRoot: path.join(scanRoot, "laragon"),
-    editor: "auto"
+    herdRoot: path.join(scanRoot, "herd"),
+    editor: "auto",
+    terminal: "auto"
   };
 }
 
