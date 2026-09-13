@@ -65,24 +65,32 @@
     </aside>
 
     <main class="workspace">
-      <header class="topbar">
-        <div class="workspace-title">
-          <p class="eyebrow">Workspace root</p>
-          <button id="workspace-settings" class="workspace-control" type="button" aria-haspopup="dialog" aria-controls="workspace-dialog">
-            <span id="drive-label" class="workspace-coordinate">…</span>
-            <span class="workspace-control-copy"><strong>workspace</strong><code id="workspace-path">loading</code></span>
-            <i class="fa-regular fa-folder-open workspace-picker-icon" aria-hidden="true"></i>
+      <header class="workspace-header" aria-label="Arbeitsbereich">
+        <div class="workspace-header-identity">
+          <div class="workspace-header-title">
+            <h1 id="workspace-page-title">Projekte</h1>
+            <span id="workspace-page-count" class="workspace-header-count" aria-label="Anzahl Projekte">0</span>
+          </div>
+          <button id="workspace-settings" class="workspace-context" type="button" aria-haspopup="dialog" aria-controls="workspace-dialog">
+            <i class="fa-regular fa-folder-open" aria-hidden="true"></i>
+            <span id="drive-label" class="workspace-context-name">Workspace</span>
+            <code id="workspace-path" class="workspace-context-path">loading</code>
+            <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
           </button>
         </div>
-        <div class="top-actions">
+        <div class="workspace-header-actions">
           <label class="global-search">
             <i class="fa-solid fa-magnifying-glass global-search-icon" aria-hidden="true"></i>
-            <span class="sr-only">Projekte durchsuchen</span>
+            <span id="workspace-search-label" class="sr-only">Projekte durchsuchen</span>
             <input id="search" type="search" placeholder="Projekte durchsuchen …" autocomplete="off">
             <kbd>Ctrl K</kbd>
           </label>
-          <button id="rescan" class="square-button" title="Projekte neu einlesen" aria-label="Projekte neu einlesen">
+          <button id="rescan" class="workspace-header-refresh" type="button" title="Workspace aktualisieren" aria-label="Workspace aktualisieren">
             <i class="fa-solid fa-rotate" aria-hidden="true"></i>
+          </button>
+          <button id="workspace-primary-action" class="workspace-header-primary" type="button">
+            <i id="workspace-primary-icon" class="fa-regular fa-folder-open" aria-hidden="true"></i>
+            <span id="workspace-primary-label">Workspace auswählen</span>
           </button>
         </div>
       </header>

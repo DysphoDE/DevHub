@@ -204,7 +204,8 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
   }
   function render() {
     if (state.page !== "git") return;
-    const repositories = state.projects.filter(p => p.git).sort((a, b) => a.name.localeCompare(b.name, "de"));
+    document.querySelector("#workspace-primary-action").disabled = Boolean(busy);
+    const repositories = state.projects.filter(p => p.git).sort((a, b) => Number(Boolean(b.git.dirty)) - Number(Boolean(a.git.dirty)) || a.name.localeCompare(b.name, "de"));
     if (!repositories.some(p => p.id === state.activeGitProjectId)) state.activeGitProjectId = repositories[0]?.id || null;
     const p = selected();
     const s = p ? session(p.id) : null;
@@ -220,7 +221,7 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const scrolls = [...root.querySelectorAll("[data-gw-scroll]"), ...rail.querySelectorAll("[data-gw-scroll]")].map(el => [el.dataset.gwScroll, el.scrollTop, el.scrollLeft]);
     const railHtml = repositoryRail(repositories);
     if (rail.__gwHtml !== railHtml) { rail.__gwHtml = railHtml; rail.innerHTML = railHtml; }
-    const html = `<div class="gw-heading"><div><h1>Git-Zentrale</h1></div>${button(icon("plus") + " Repository hinzufügen", "add")}</div><div class="gw-shell"><main class="gw-main" aria-label="Git-Repository">${p ? toolbar(p, w) + navigation(p, w) + operationBanner(p, w) + (notice?.id === p.id ? `<div class="gw-notice ${notice.error ? "error" : "success"}" role="${notice.error ? "alert" : "status"}">${icon(notice.error ? "circle-exclamation" : "circle-check")}<span>${esc(notice.message)}</span>${button(icon("xmark"), "dismiss-notice", 'aria-label="Meldung schließen"', false, "gw-icon-button")}</div>` : "") + `<div class="gw-view" data-gw-scroll="view">${s.tab === "changes" ? changeView(p) : s.tab === "history" ? historyView(p) : s.tab === "branches" ? branchView(p, w) : s.tab === "stashes" ? stashView(p, w) : s.tab === "tags" ? tagsView(p, w) : settingsView(p, w)}</div>` : empty("code-branch", "Dein Git-Arbeitsbereich", "Klone ein Repository oder aktiviere Git in einem vorhandenen Projekt.", button("Repository hinzufügen", "add", "", false, "gw-primary"))}<footer class="gw-statusbar"><span>${busy ? icon("spinner fa-spin") + " Git-Aktion läuft …" : icon("circle-check") + " Bereit"}</span>${p ? `<span>${esc(p.git.upstream || (p.git.remoteName ? "Noch kein Upstream" : "Lokales Repository"))}</span><span>${icon("arrow-up")} ${p.git.ahead} voraus <i class="gw-footer-divider"></i>${icon("arrow-down")} ${p.git.behind} zurück</span>` : ""}</footer></main></div>`;
+    const html = `<div class="gw-shell"><main class="gw-main" aria-label="Git-Repository">${p ? toolbar(p, w) + navigation(p, w) + operationBanner(p, w) + (notice?.id === p.id ? `<div class="gw-notice ${notice.error ? "error" : "success"}" role="${notice.error ? "alert" : "status"}">${icon(notice.error ? "circle-exclamation" : "circle-check")}<span>${esc(notice.message)}</span>${button(icon("xmark"), "dismiss-notice", 'aria-label="Meldung schließen"', false, "gw-icon-button")}</div>` : "") + `<div class="gw-view" data-gw-scroll="view">${s.tab === "changes" ? changeView(p) : s.tab === "history" ? historyView(p) : s.tab === "branches" ? branchView(p, w) : s.tab === "stashes" ? stashView(p, w) : s.tab === "tags" ? tagsView(p, w) : settingsView(p, w)}</div>` : empty("code-branch", "Dein Git-Arbeitsbereich", "Klone ein Repository oder aktiviere Git in einem vorhandenen Projekt.", button("Repository hinzufügen", "add", "", false, "gw-primary"))}<footer class="gw-statusbar"><span>${busy ? icon("spinner fa-spin") + " Git-Aktion läuft …" : icon("circle-check") + " Bereit"}</span>${p ? `<span>${esc(p.git.upstream || (p.git.remoteName ? "Noch kein Upstream" : "Lokales Repository"))}</span><span>${icon("arrow-up")} ${p.git.ahead} voraus <i class="gw-footer-divider"></i>${icon("arrow-down")} ${p.git.behind} zurück</span>` : ""}</footer></main></div>`;
     if (root.__gwHtml !== html) {
       root.__gwHtml = html;
       root.innerHTML = html;
@@ -418,5 +419,5 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const file = event.target.closest('.gw-file > button[data-gw="file"]');
     if (file && ["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); const files = [...root.querySelectorAll('.gw-file > button[data-gw="file"]')]; const next = files[files.indexOf(file) + (event.key === "ArrowDown" ? 1 : -1)]; if (next) { const path = next.dataset.path; interact(next).then(() => root.querySelector(`.gw-file > button[data-path="${CSS.escape(path)}"]`)?.focus()); } }
   });
-  return { render, load: ensure };
+  return { render, load: ensure, openAddRepository: () => { if (!busy) addRepository(); } };
 }

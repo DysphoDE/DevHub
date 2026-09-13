@@ -844,7 +844,17 @@ function renderWorkspaceNavigation() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  elements.search.placeholder = gitActive ? "Repositories oder Branches durchsuchen …" : "Projekte durchsuchen …";
+  const pageTitle = gitActive ? "Git-Zentrale" : "Projekte";
+  const searchLabel = gitActive ? "Repositories durchsuchen" : "Projekte durchsuchen";
+  document.querySelector("#workspace-page-title").textContent = pageTitle;
+  const count = document.querySelector("#workspace-page-count");
+  count.textContent = gitActive ? state.projects.filter(project => project.git).length : state.projects.length;
+  count.setAttribute("aria-label", gitActive ? "Anzahl Repositories" : "Anzahl Projekte");
+  document.querySelector("#workspace-search-label").textContent = searchLabel;
+  elements.search.placeholder = `${searchLabel} …`;
+  document.querySelector("#workspace-primary-label").textContent = gitActive ? "Repository hinzufügen" : "Workspace auswählen";
+  document.querySelector("#workspace-primary-icon").className = gitActive ? "fa-solid fa-plus" : "fa-regular fa-folder-open";
+  if (!gitActive) document.querySelector("#workspace-primary-action").disabled = false;
 }
 
 async function loadGitCommitSuggestion(projectId, force = false) {
@@ -1748,6 +1758,10 @@ document.querySelector(".view-switch").addEventListener("click", (event) => { co
 elements.groupToggle.addEventListener("click", () => { state.group = state.group === "category" ? "none" : "category"; localStorage.setItem("devhub_group", state.group); render(false); });
 elements.rescan.addEventListener("click", rescan); elements.emptyAction.addEventListener("click", () => state.projects.length ? resetFilters() : openWorkspaceSettings());
 elements.workspaceSettings.addEventListener("click", openWorkspaceSettings);
+document.querySelector("#workspace-primary-action").addEventListener("click", () => {
+  if (state.page === "git") gitWorkspace.openAddRepository();
+  else openWorkspaceSettings();
+});
 document.querySelector("#sidebar-workspace-settings").addEventListener("click", openWorkspaceSettings);
 elements.workspaceBrowse.addEventListener("click", pickWorkspace);
 elements.workspaceForm.addEventListener("submit", saveWorkspace);

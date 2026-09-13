@@ -15,6 +15,8 @@
   --type-title: 24px;
   --type-section: 20px;
   --sidebar-width: 232px;
+  --workspace-gutter: 24px;
+  --workspace-header-height: 108px;
 }
 body { font-family: var(--font-ui); font-size: var(--type-body); line-height: 1.5; }
 button, input, select, textarea { font-family: var(--font-ui); }
@@ -24,7 +26,7 @@ button, input, select, textarea { font-family: var(--font-ui); }
 .sidebar::after { display: none; }
 .sidebar-top { display: flex; justify-content: space-between; align-items: center; padding: 0 7px 25px; border-bottom: 1px solid #ffffff0d; }
 .brand { display: flex; gap: 10px; align-items: center; }
-.brand-mark { width: 35px; height: 35px; padding: 8px; border-radius: 9px; box-shadow: none; background: #526ddd; }
+.brand-mark { width: 35px; height: 35px; padding: 8px; border-radius: 9px; box-shadow: none; background: var(--runtime); }
 .brand-copy { display: block; }
 .brand-copy strong { font: 650 21px/1.2 var(--font-ui); letter-spacing: -.5px; }
 .brand-copy small { display: block; color: #8697b2; font: var(--type-micro)/1.4 var(--font-ui); margin-top: 4px; letter-spacing: 0; }
@@ -71,12 +73,12 @@ button, input, select, textarea { font-family: var(--font-ui); }
 .sidebar-git-repositories .gw-repo-count.dirty { color: #e1c089; background: #bc8c3326; }
 .sidebar-git-repositories .gw-repo-count { font-size: var(--type-micro); }
 .sidebar-git-repositories .gw-repositories > footer { display: none; }
-.workspace { min-width: 0; padding: 24px; }
-.git-page-active .workspace { height: 100dvh; min-height: 690px; padding: 0 20px 14px; }
+.workspace { min-width: 0; display: flex; flex-direction: column; padding: 0 var(--workspace-gutter) var(--workspace-gutter); }
+.git-page-active .workspace { height: 100dvh; min-height: 690px; }
 .git-page { width: 100%; max-width: none; margin: 0; }
 .gw-shell { display: flex; flex-direction: column; width: 100%; min-width: 0; }
 .gw-main { flex: 1; min-height: 0; }
-.gw-heading { margin: 4px 0 13px; }.gw-heading h1 { font: 600 var(--type-title)/1.4 var(--font-ui); letter-spacing: -.6px; }
+
 .gw-toolbar { gap: 14px; padding: 12px 16px; }
 .gw-repo-title { max-width: 240px; }.gw-repo-title h2 { font-size: var(--type-body-large); }
 .gw-repo-title code { font-size: var(--type-micro); }
@@ -117,7 +119,7 @@ button, input, select, textarea { font-family: var(--font-ui); }
   :root { --sidebar-width: 210px; }.sidebar { padding-left: 10px; padding-right: 10px; }
   .gw-changes,.gw-history { grid-template-columns: 285px minmax(0,1fr); }.gw-tabs { gap: 15px; overflow-x: auto; }.gw-tabs > .gw-button i { display: none; }
   .gw-toolbar { flex-wrap: wrap; }.gw-sync-actions { order: 4; flex: 1 0 100%; }.gw-tools { display: flex; }
-  .workspace { padding: 18px; }.git-page-active .workspace { padding: 0 14px 14px; }
+  :root { --workspace-gutter: 18px; }
 }
 @media (min-width: 761px) and (max-height: 850px) {
   .gw-composer { padding: 10px 12px 8px; }.gw-composer textarea { min-height: 40px; height: 40px; }.gw-composer-options { padding: 6px 0; }
@@ -136,8 +138,9 @@ button, input, select, textarea { font-family: var(--font-ui); }
   .sidebar-git-repositories .gw-repositories > header { height: 42px; }.sidebar-git-repositories .gw-search { margin-top: 4px; }.sidebar-git-repositories .gw-segments { display: none; }
   .sidebar-git-repositories .gw-repo-list { display: flex; grid-column: 1 / -1; overflow-x: auto; padding: 5px 0 0; gap: 7px; }
   .sidebar-git-repositories .gw-repo { flex: 0 0 185px; min-height: 59px; margin: 0; }
-  .workspace,.git-page-active .workspace { padding: 16px 10px; height: auto; min-height: 0; }
-  .topbar,.git-page-active .topbar { min-height: 50px; margin-bottom: 15px; flex-basis: auto; }
+  :root { --workspace-gutter: 12px; }
+  .workspace,.git-page-active .workspace { height: auto; min-height: 0; }
+
   .mobile-workspace-tabs,.git-page-active .mobile-workspace-tabs { display: none; }.workspace-control-copy { display: none; }
   .gw-toolbar { flex-wrap: wrap; }.gw-tabs { gap: 15px; overflow-x: auto; }.gw-tabs > .gw-button i { display: none; }
   .gw-changes,.gw-history { display: flex; flex-direction: column; }.gw-files { flex: initial; max-height: 270px; }.gw-change-list { border-right: 0; }
@@ -145,4 +148,57 @@ button, input, select, textarea { font-family: var(--font-ui); }
   .gw-composer-options > span { display: inline; }.gw-composer textarea { min-height: 60px; }
   .gw-statusbar { flex-wrap: wrap; font-size: var(--type-micro); }.gw-statusbar > span:last-child { font-size: var(--type-micro); }
   .gw-history-list { max-height: 330px; }.gw-history-detail { min-height: 350px; max-height: 650px; }
+}
+
+/* One persistent header for both pages. Only the title, count and action change. */
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex: 0 0 auto;
+  min-height: var(--workspace-header-height);
+  width: 100%;
+  padding: 20px 0;
+}
+.workspace-header-identity { flex: 1; min-width: 0; }
+.workspace-header-title { display: flex; align-items: center; gap: 10px; }
+.workspace-header-title h1 { margin: 0; color: #283951; font: 600 var(--type-title)/1.35 var(--font-ui); letter-spacing: -.6px; }
+.workspace-header-count { min-width: 26px; padding: 2px 7px; color: #73849e; background: #e8edf4; border: 1px solid #dfe6ef; border-radius: 6px; font: 500 var(--type-caption)/1.5 var(--font-ui); text-align: center; }
+.workspace-context { display: flex; align-items: center; gap: 7px; max-width: 100%; margin-top: 8px; padding: 0; color: #8392a9; background: transparent; border: 0; cursor: pointer; text-align: left; font: var(--type-micro)/1.5 var(--font-ui); }
+.workspace-context:hover { color: #4265be; }
+.workspace-context > i { flex: 0 0 auto; font-size: var(--type-micro); }
+.workspace-context-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #677b99; }
+.workspace-context-path { flex: 1; min-width: 0; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px; border-left: 1px solid #d9e1eb; color: #8898b0; font: var(--type-micro)/1.5 var(--font-ui); }
+.workspace-context > i:last-child { font-size: 10px; }
+.workspace-header-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.workspace-header .global-search { width: clamp(205px, 22vw, 320px); height: 40px; padding: 0 11px; gap: 8px; background: #fff; border: 1px solid #dce3ed; border-radius: 7px; box-shadow: none; }
+.workspace-header .global-search input { font-size: var(--type-caption); }
+.workspace-header .global-search kbd { padding: 3px 5px; font: var(--type-micro)/1.25 var(--font-ui); }
+.workspace-header-refresh,.workspace-header-primary { height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 12px; color: #627793; background: #fff; border: 1px solid #dce3ed; border-radius: 7px; font: 500 var(--type-caption)/1.4 var(--font-ui); cursor: pointer; white-space: nowrap; }
+.workspace-header-refresh { width: 40px; flex: 0 0 40px; padding: 0; }
+.workspace-header-primary { width: 202px; color: #4261b6; background: #f7f9ff; border-color: #d1dcf5; }
+.workspace-header-refresh:hover:not(:disabled),.workspace-header-primary:hover:not(:disabled) { background: #edf2ff; border-color: #b7c8ee; color: #3456af; }
+.workspace-header-refresh:disabled,.workspace-header-primary:disabled { opacity: .5; cursor: default; }
+.workspace-header-refresh.loading i { animation: spin .8s linear infinite; }
+#projects-page,#git-page { min-width: 0; }
+@media (max-width: 1150px) and (min-width: 761px) {
+  .workspace-header { gap: 16px; }
+  .workspace-context-path { display: none; }
+  .workspace-header .global-search { width: 210px; }
+  .workspace-header .global-search kbd { display: none; }
+  .workspace-header-primary { width: 194px; }
+}
+@media (max-width: 980px) {
+  .workspace-header { display: grid; grid-template-columns: minmax(0,1fr); gap: 14px; padding: 18px 0; }
+  .workspace-header-actions { display: grid; grid-template-columns: minmax(0,1fr) 40px 202px; gap: 8px; }
+  .workspace-header .global-search { width: 100%; }
+  .workspace-header-primary { width: 100%; }
+  .workspace-context-path { display: block; }
+}
+@media (max-width: 480px) {
+  .workspace-header-actions { grid-template-columns: minmax(0,1fr) 40px; }
+  .workspace-header-primary { grid-column: 1 / -1; }
+  .workspace-header .global-search kbd { display: none; }
+  .workspace-context-name { max-width: 120px; }
 }
