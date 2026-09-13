@@ -11,14 +11,16 @@
   <link rel="stylesheet" href="/vendor/fontawesome/css/solid.min.css">
   <link rel="stylesheet" href="/vendor/fontawesome/css/regular.min.css">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/git-workspace.css">
+  <link rel="stylesheet" href="/design-system.css">
 </head>
 <body>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="Projektansichten">
+    <aside class="sidebar" aria-label="DevHub Navigation">
       <div class="sidebar-top">
         <a class="brand" href="/" aria-label="DevHub Startseite">
           <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="brand-copy"><strong>DEVHUB</strong><small>LOCAL WORKBENCH</small></span>
+          <span class="brand-copy"><strong>DevHub</strong><small>Dein Entwicklungsplatz</small></span>
         </a>
         <button id="mobile-search" class="sidebar-icon mobile-only" aria-label="Suche öffnen"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i></button>
       </div>
@@ -26,10 +28,10 @@
       <section class="side-group" aria-labelledby="views-heading">
         <p class="side-label" id="views-heading">Arbeitsbereich</p>
         <nav id="view-filters" class="side-nav">
-          <button class="side-link active" data-filter="all" data-page="projects" aria-pressed="true"><span class="side-icon"><i class="fa-solid fa-house" aria-hidden="true"></i></span><span>Alle Projekte</span><b id="all-count">0</b></button>
-          <button class="side-link git-page-link" data-page="git" aria-pressed="false"><span class="side-icon"><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><span>Git-Zentrale</span><b id="git-repository-count">0</b></button>
-          <span class="side-nav-divider" aria-hidden="true"></span>
-          <button class="side-link attention-link project-filter-link" data-filter="attention" data-page="projects" aria-pressed="false"><span class="side-icon attention-icon"><i class="fa-solid fa-exclamation" aria-hidden="true"></i></span><span>Benötigt Aufmerksamkeit</span><b id="attention-count">0</b></button>
+          <button class="side-link active" aria-label="Alle Projekte" title="Alle Projekte" data-filter="all" data-page="projects" aria-pressed="true"><span class="side-icon"><i class="fa-solid fa-house" aria-hidden="true"></i></span><span>Projekte</span><b id="all-count">0</b></button>
+          <button class="side-link git-page-link" aria-label="Git-Zentrale" title="Git-Zentrale" data-page="git" aria-pressed="false"><span class="side-icon"><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><span>Git-Zentrale</span><b id="git-repository-count">0</b></button>
+          <span class="side-nav-divider" aria-hidden="true"></span><span class="side-context-label project-filter-link">Projektansichten</span>
+          <button class="side-link attention-link project-filter-link" data-filter="attention" data-page="projects" aria-pressed="false"><span class="side-icon attention-icon"><i class="fa-solid fa-exclamation" aria-hidden="true"></i></span><span>Aufmerksamkeit</span><b id="attention-count">0</b></button>
           <button class="side-link project-filter-link" data-filter="favorites" data-page="projects" aria-pressed="false"><span class="side-icon"><i class="fa-regular fa-star" aria-hidden="true"></i></span><span>Favoriten</span><b id="favorite-count">0</b></button>
           <button class="side-link project-filter-link" data-filter="recent" data-page="projects" aria-pressed="false"><span class="side-icon"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i></span><span>Zuletzt geöffnet</span><b id="recent-count">0</b></button>
           <button class="side-link project-filter-link" data-filter="running" data-page="projects" aria-pressed="false"><span class="side-icon pulse-icon"></span><span>Läuft gerade</span><b id="running-filter-count">0</b></button>
@@ -46,12 +48,15 @@
         <div id="tech-filters" class="tech-filters"></div>
       </section>
 
+      <div id="sidebar-git-repositories" class="sidebar-git-repositories" hidden></div>
+
       <section class="side-summary" aria-label="Workspace-Zusammenfassung">
         <div><strong id="running-count">0</strong><span>Prozesse</span></div>
         <div><strong id="project-count">0</strong><span>Projekte</span></div>
         <div><strong id="launcher-count">0</strong><span>Starter</span></div>
       </section>
 
+      <button id="sidebar-workspace-settings" class="sidebar-settings"><i class="fa-solid fa-folder-tree" aria-hidden="true"></i><span>Workspace verwalten</span><i class="fa-solid fa-sliders" aria-hidden="true"></i></button>
       <div class="sidebar-foot">
         <span class="secure-dot"></span>
         <span>localhost only</span>
@@ -84,7 +89,7 @@
 
       <nav id="mobile-workspace-tabs" class="mobile-workspace-tabs" aria-label="Arbeitsbereich wechseln">
         <button data-page="projects" class="active" aria-pressed="true"><i class="fa-solid fa-border-all" aria-hidden="true"></i>Projekte</button>
-        <button data-page="git" aria-pressed="false"><i class="fa-solid fa-code-branch" aria-hidden="true"></i>Git</button>
+        <button aria-label="Git-Zentrale" title="Git-Zentrale" data-page="git" aria-pressed="false"><i class="fa-solid fa-code-branch" aria-hidden="true"></i>Git</button>
       </nav>
 
       <div id="projects-page">

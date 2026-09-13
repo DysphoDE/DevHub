@@ -13,10 +13,11 @@ The server binds to your loopback interface by default. Project paths, Git state
 - Detects common stacks such as Node.js, React, Vue, Next.js, PHP, Laravel, Symfony, Python, Docker, and static HTML.
 - Creates launch actions from `package.json` scripts, `start.sh` (macOS/Linux), `start.bat`/`start.cmd` (Windows), `start.ps1`, static sites, and PHP entry points.
 - Starts and stops development processes, assigns free preview ports, and streams their output.
-- Shows Git branch, sync state, changed files, diffs, staging controls, commits, and pushes in one workbench.
+- Shows Git branch, sync state, changed files, diffs, commits, and pushes in one workbench. Changed files are checked by default; uncheck files to exclude them and commit directly.
 - Opens projects in the file manager, terminal, or a detected editor on every platform.
 - Supports favorites, recent projects, a context-aware global search (`Ctrl+K`), technology filters, and grid/list views.
-- Includes a workspace-wide Git control center for browsing every repository, exploring the complete commit history and per-commit diffs, selecting and staging files in batches, safely discarding local changes, generating local commit-message suggestions, committing, and syncing without leaving DevHub.
+- Includes a Git control center with repository navigation in the shared sidebar, checkbox commits with descriptions, optional hunk staging, history search and file diffs, branch management and comparison, merge/rebase with conflict recovery, stashes, tags, remotes, local identity, cherry-pick, revert, clone and init. File menus can add files or parent folders to `.gitignore`, optionally ending tracking while retaining local files.
+- Uses a shared typography system in `public/design-system.css`: Inter for the interface, JetBrains Mono for code, 14px body text, 13px controls/code and at least 12px metadata.
 - Supports switching and creating branches, undoing the last unpushed commit (changes stay staged), and moving discarded new files to the system trash (Windows Recycle Bin, macOS Trash, Linux via `gio`) instead of deleting them permanently.
 - Shows the state of your local stack—Laragon, Herd, or Valet—links projects to their local domains (`http://project.test`), and starts, stops, or reloads the web server from the dashboard.
 - Can start silently when you sign in: Task Scheduler on Windows, a LaunchAgent on macOS, a systemd user unit on Linux.

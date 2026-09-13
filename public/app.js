@@ -1,3 +1,5 @@
+import { createGitWorkspace } from "./git-workspace.js";
+
 const storedFavorites = JSON.parse(localStorage.getItem("devhub_favorites") || "[]");
 const storedRecent = JSON.parse(localStorage.getItem("devhub_recent") || "[]");
 const state = {
@@ -828,66 +830,7 @@ function gitRepositoryItem(project) {
 }
 
 function renderGitPage() {
-  const repositories = state.projects.filter((project) => project.git).sort((a, b) => {
-    const priority = (project) => gitConflictCount(project.git) * 1000 + Number(project.git.dirty) * 100 + (project.git.ahead + project.git.behind) * 10;
-    return priority(b) - priority(a) || a.name.localeCompare(b.name, "de");
-  });
-  const query = state.gitQuery.trim().toLocaleLowerCase("de");
-  const visible = repositories.filter((project) => gitRepositoryMatches(project, state.gitFilter) && (!query || [project.name, project.relativePath, project.git.branch, project.git.remoteName, project.git.lastCommit?.subject]
-    .join(" ").toLocaleLowerCase("de").includes(query)));
-  if (!repositories.some((project) => project.id === state.activeGitProjectId)) state.activeGitProjectId = repositories[0]?.id || null;
-  if (visible.length && !visible.some((project) => project.id === state.activeGitProjectId)) state.activeGitProjectId = visible[0].id;
-  const selected = repositories.find((project) => project.id === state.activeGitProjectId) || null;
-  const changedRepositories = repositories.filter((project) => project.git.dirty).length;
-  const syncRepositories = repositories.filter((project) => project.git.ahead || project.git.behind).length;
-  const conflictRepositories = repositories.filter((project) => gitConflictCount(project.git) > 0).length;
-  const filterLabels = { all: "Alle", changed: "Geändert", staged: "Vorgemerkt", sync: "Synchronisieren", conflicts: "Konflikte", clean: "Sauber" };
-  const filters = Object.entries(filterLabels).map(([filter, label]) => {
-    const active = state.gitFilter === filter;
-    const count = repositories.filter((project) => gitRepositoryMatches(project, filter)).length;
-    return `<button class="${active ? "active" : ""}" data-git-filter="${filter}" aria-pressed="${active}">${label} <b>${count}</b></button>`;
-  }).join("");
-  const deckSummary = !repositories.length ? "Kein Repository im Workspace erkannt"
-    : conflictRepositories ? `${conflictRepositories} ${conflictRepositories === 1 ? "Repository braucht" : "Repositories brauchen"} Konfliktlösung`
-    : changedRepositories ? `${changedRepositories} von ${repositories.length} Repositories mit offenen Änderungen`
-    : syncRepositories ? `${syncRepositories} ${syncRepositories === 1 ? "Repository wartet" : "Repositories warten"} auf Synchronisierung`
-    : `Alle ${repositories.length} Repositories sind sauber und synchron`;
-
-  const gitPageHtml = `<header class="git-command-deck ${conflictRepositories ? "has-conflicts" : ""}">
-    <div class="git-command-title">
-      <span class="git-command-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <div><p class="eyebrow">Repository control</p><h1>Git-Zentrale</h1><span>${deckSummary}</span></div>
-    </div>
-  </header>
-  <div class="git-page-toolbar">
-    <div class="git-filter-tabs" aria-label="Repositories filtern">${filters}</div>
-    <span><b>${visible.length}</b> von ${repositories.length} Repositories</span>
-  </div>
-  ${repositories.length ? `<div class="git-console">
-    <aside class="git-repository-rail" aria-label="Repositories">
-      <header><div><p class="eyebrow">Workspace inbox</p><strong>Repositories</strong></div><span>${changedRepositories} aktiv</span></header>
-      <div class="git-repository-list">
-        ${visible.map(gitRepositoryItem).join("") || `<div class="git-repository-empty"><i class="fa-solid fa-filter-circle-xmark" aria-hidden="true"></i><strong>Kein Treffer</strong><span>Ändere Filter oder Suche.</span></div>`}
-      </div>
-    </aside>
-    <section class="git-page-workbench" aria-live="polite">
-      ${selected && visible.length ? `<header class="git-selected-header">
-        <div class="git-selected-identity">
-          <span class="git-selected-symbol"><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span>
-          <div><p class="eyebrow">Ausgewähltes Repository</p><h2>${escapeHtml(selected.name)}</h2><code>${escapeHtml(selected.relativePath)}</code></div>
-        </div>
-        <div class="git-selected-actions">
-          <button data-open-details="${selected.id}"><i class="fa-regular fa-window-restore" aria-hidden="true"></i><span>Projekt</span></button>
-          <button data-project-action="editor" data-project-id="${selected.id}" ${state.capabilities?.editor.available ? "" : "disabled"}><i class="fa-solid fa-code" aria-hidden="true"></i><span>${escapeHtml(state.capabilities?.editor.name || "Editor")}</span></button>
-          <button data-project-action="terminal" data-project-id="${selected.id}" ${state.capabilities?.terminal.available ? "" : "disabled"}><i class="fa-solid fa-terminal" aria-hidden="true"></i><span>Terminal</span></button>
-        </div>
-      </header>${gitDetail(selected, "page")}` : `<div class="git-workbench-empty"><span><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><strong>Kein Repository ausgewählt</strong><p>Wähle links ein Repository oder passe den Filter an.</p></div>`}
-    </section>
-  </div>` : `<section class="git-page-empty"><span><i class="fa-solid fa-code-branch" aria-hidden="true"></i></span><h2>Noch keine Repositories</h2><p>DevHub zeigt hier jedes Git-Repository, das im gewählten Workspace erkannt wird.</p><button data-rescan-workspace>Workspace neu einlesen</button></section>`}`;
-  if (elements.gitPage.__devhubHtml !== gitPageHtml) {
-    elements.gitPage.__devhubHtml = gitPageHtml;
-    elements.gitPage.innerHTML = gitPageHtml;
-  }
+  gitWorkspace.render();
 }
 
 function renderWorkspaceNavigation() {
@@ -895,8 +838,9 @@ function renderWorkspaceNavigation() {
   document.body.classList.toggle("git-page-active", gitActive);
   elements.projectsPage.hidden = gitActive;
   elements.gitPage.hidden = !gitActive;
+  document.querySelector("#sidebar-git-repositories").hidden = !gitActive;
   document.querySelectorAll("[data-page]").forEach((button) => {
-    const active = button.dataset.page === "git" ? gitActive : !gitActive && (!button.dataset.filter || button.dataset.filter === state.filter);
+    const active = button.dataset.page === "git" ? gitActive : !gitActive && (!button.dataset.filter || button.dataset.filter === "all" || button.dataset.filter === state.filter);
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
@@ -924,6 +868,7 @@ async function loadGitCommitSuggestion(projectId, force = false) {
 }
 
 function loadGitSurfaceForProject(projectId, force = false) {
+  if (state.page === "git" && !elements.projectDialog.open) { gitWorkspace.load(projectId, force); return; }
   const project = state.projects.find((item) => item.id === projectId);
   if (!project?.git) return;
   if (state.gitMode === "history") loadGitHistory(projectId, false, force);
@@ -1803,6 +1748,7 @@ document.querySelector(".view-switch").addEventListener("click", (event) => { co
 elements.groupToggle.addEventListener("click", () => { state.group = state.group === "category" ? "none" : "category"; localStorage.setItem("devhub_group", state.group); render(false); });
 elements.rescan.addEventListener("click", rescan); elements.emptyAction.addEventListener("click", () => state.projects.length ? resetFilters() : openWorkspaceSettings());
 elements.workspaceSettings.addEventListener("click", openWorkspaceSettings);
+document.querySelector("#sidebar-workspace-settings").addEventListener("click", openWorkspaceSettings);
 elements.workspaceBrowse.addEventListener("click", pickWorkspace);
 elements.workspaceForm.addEventListener("submit", saveWorkspace);
 document.querySelector("#workspace-close").addEventListener("click", () => elements.workspaceDialog.close());
@@ -1843,5 +1789,7 @@ document.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") { event.preventDefault(); elements.search.focus(); elements.search.select(); }
   if (event.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) { event.preventDefault(); elements.search.focus(); }
 });
+
+const gitWorkspace = createGitWorkspace({ root: elements.gitPage, state, api, renderApp: () => render(false), renderPatch, escapeHtml, toast, projectAction: runProjectAction, rescan });
 
 bootstrap();

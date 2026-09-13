@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, getAppDirectory, saveScanRoot } from "./config.js";
-import { readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
+import { advancedGitActions, readGitWorkspace, readGitStash, readGitComparison, initializeGitRepository, cloneGitRepository, readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
 import { ProcessManager } from "./process-manager.js";
 import { readGitInfo, scanWorkspace } from "./scanner.js";
 import { isStackAction } from "./stack.js";
@@ -243,6 +243,9 @@ function serveStatic(requestPath: string, response: ServerResponse): void {
   }).catch(() => sendJson(response, 404, { error: "Nicht gefunden" }));
 }
 
+const busyRepositories = new Set<string>();
+let cloningRepository = false;
+
 const server = createServer(async (request, response) => {
   if (!isLoopback(request.socket.remoteAddress)) {
     sendJson(response, 403, { error: "DevHub ist nur lokal erreichbar." });
@@ -401,22 +404,56 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const gitActionMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(refresh|stage|unstage|stage-files|unstage-files|discard-files|stage-all|unstage-all|commit|fetch|pull|push|checkout|create-branch|undo-commit)$/);
-    if (request.method === "POST" && gitActionMatch) {
+    if (request.method === "POST" && pathname === "/api/git/clone") {
       if (!requireToken(request, response)) return;
-      const project = projects.find((candidate) => candidate.id === gitActionMatch[1]);
-      if (!project?.git) {
-        sendJson(response, 404, { error: "Git-Repository nicht gefunden. Bitte Projekte neu einlesen." });
-        return;
+      if (cloningRepository) throw new Error("Es läuft bereits ein Klonvorgang.");
+      cloningRepository = true;
+      try {
+        await cloneGitRepository(config.scanRoot, await readJsonBody(request));
+        await refreshProjects();
+        sendJson(response, 200, { message: "Repository geklont.", projects: publicProjects() });
+      } finally { cloningRepository = false; }
+      return;
+    }
+
+    const gitWorkspaceMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(workspace|stash-diff|compare)$/);
+    if (request.method === "GET" && gitWorkspaceMatch) {
+      const project = projects.find(candidate => candidate.id === gitWorkspaceMatch[1]);
+      if (!project?.git) throw new Error("Git-Repository nicht gefunden.");
+      const data = gitWorkspaceMatch[2] === "workspace" ? await readGitWorkspace(project)
+        : gitWorkspaceMatch[2] === "compare" ? await readGitComparison(project, url.searchParams.get("branch"))
+        : await readGitStash(project, { stash: url.searchParams.get("stash"), hash: url.searchParams.get("hash") });
+      sendJson(response, 200, data);
+      return;
+    }
+
+    const gitActionMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/([a-z-]+)$/);
+    const actions: readonly string[] = ["init", "refresh", "stage", "unstage", "stage-files", "unstage-files", "discard-files", "stage-all", "unstage-all", "commit", "fetch", "pull", "push", "checkout", "create-branch", "undo-commit", ...advancedGitActions];
+    if (request.method === "POST" && gitActionMatch && actions.includes(gitActionMatch[2])) {
+      if (!requireToken(request, response)) return;
+      const project = projects.find(candidate => candidate.id === gitActionMatch[1]);
+      if (!project) throw new Error("Projekt nicht gefunden. Bitte Projekte neu einlesen.");
+      const repository = path.resolve(project.absolutePath, project.git?.repositoryRoot || ".");
+      if (busyRepositories.has(repository)) throw new Error("Für dieses Repository läuft bereits eine Git-Aktion.");
+      busyRepositories.add(repository);
+      try {
+        const payload = await readJsonBody(request) as GitActionPayload;
+        if (gitActionMatch[2] === "init") {
+          await initializeGitRepository(project);
+          project.git = await readGitInfo(project.absolutePath, project.absolutePath);
+          sendJson(response, 200, { message: "Git-Repository angelegt.", project: publicProject(project) });
+        } else {
+          await refreshProjectGit(project);
+          const message = await runGitAction(project, gitActionMatch[2] as GitAction, payload);
+          await refreshProjectGit(project);
+          sendJson(response, 200, { message, project: publicProject(project) });
+        }
+      } finally {
+        // Auch ein fehlgeschlagener Merge kann einen neuen Konfliktzustand hinterlassen.
+        await refreshProjectGit(project);
+        broadcastProjects();
+        busyRepositories.delete(repository);
       }
-      const payload = await readJsonBody(request) as GitActionPayload;
-      // Destruktive Aktionen validieren gegen den Git-Status: vorher neu einlesen,
-      // damit kein veralteter Snapshot als Grundlage dient.
-      if (gitActionMatch[2] === "discard-files" || gitActionMatch[2] === "undo-commit") await refreshProjectGit(project);
-      const message = await runGitAction(project, gitActionMatch[2] as GitAction, payload);
-      await refreshProjectGit(project);
-      broadcastProjects();
-      sendJson(response, 200, { message, project: publicProject(project) });
       return;
     }
 
@@ -428,7 +465,7 @@ const server = createServer(async (request, response) => {
         return;
       }
       const file = url.searchParams.get("file");
-      sendJson(response, 200, { file, sections: await readGitDiff(project, file) });
+      sendJson(response, 200, { file, sections: await readGitDiff(project, file, url.searchParams.get("combined") === "true") });
       return;
     }
 
@@ -441,7 +478,7 @@ const server = createServer(async (request, response) => {
       }
       const offset = Number(url.searchParams.get("offset") || 0);
       const limit = Number(url.searchParams.get("limit") || 60);
-      sendJson(response, 200, await readGitHistory(project, offset, limit));
+      sendJson(response, 200, await readGitHistory(project, offset, limit, url.searchParams.get("query") || "", url.searchParams.get("all") === "true"));
       return;
     }
 
@@ -452,7 +489,7 @@ const server = createServer(async (request, response) => {
         sendJson(response, 404, { error: "Git-Repository nicht gefunden. Bitte Projekte neu einlesen." });
         return;
       }
-      sendJson(response, 200, await readGitCommit(project, gitCommitMatch[2]));
+      sendJson(response, 200, await readGitCommit(project, gitCommitMatch[2], url.searchParams.get("file")));
       return;
     }
 

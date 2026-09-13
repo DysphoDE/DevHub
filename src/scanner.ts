@@ -540,7 +540,10 @@ export async function readGitInfo(repositoryPath: string | null, projectPath: st
     const lastCommit = commitParts.length === 4 ? {
       hash: commitParts[0], subject: commitParts[1], author: commitParts[2], date: commitParts[3]
     } : null;
-    const remoteName = upstream?.includes("/") ? upstream.split("/")[0] : remoteResult.stdout.trim() ? "origin" : null;
+    const remoteNames = (await execFileAsync("git", ["-C", repositoryPath, "remote"], options)).stdout.trim().split(/\r?\n/).filter(Boolean);
+    const remoteName = upstream ? remoteNames.filter(name => upstream.startsWith(name + "/")).sort((a, b) => b.length - a.length)[0] || null
+      : remoteNames.includes("origin") ? "origin" : remoteNames[0] || null;
+    const remoteUrl = remoteName && remoteName !== "origin" ? (await execFileAsync("git", ["-C", repositoryPath, "remote", "get-url", remoteName], options)).stdout : remoteResult.stdout;
     return {
       branch: branch === "(detached)" ? null : branch,
       dirty: staged + unstaged + untracked > 0,
@@ -551,7 +554,7 @@ export async function readGitInfo(repositoryPath: string | null, projectPath: st
       untracked,
       changedFiles: files.length,
       remoteName,
-      remoteUrl: gitRemoteWebUrl(remoteResult.stdout),
+      remoteUrl: gitRemoteWebUrl(remoteUrl),
       upstream,
       repositoryRoot: toPosix(path.relative(projectPath, repositoryPath)) || ".",
       files: files.slice(0, 500),
