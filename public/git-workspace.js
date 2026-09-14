@@ -1,4 +1,6 @@
 // The Git workspace owns its view state; project discovery and system actions stay in app.js.
+// Layout: a three-part header (repository · branch · one sync action), a guidance strip that names the next step,
+// two primary tabs (changes · history) and a repository menu for everything that is used rarely.
 export function createGitWorkspace({ root, state, api, renderApp, renderPatch, escapeHtml: esc, toast, projectAction, rescan }) {
   const rail = document.querySelector("#sidebar-git-repositories");
   const sessions = new Map();
@@ -9,13 +11,19 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
   let notice = null;
   let repoFilter = "all";
   let searchTimer;
+  let menu = null;
+  let menuQuery = "";
+  let view = localStorage.getItem("devhub_git_view") === "overview" ? "overview" : "repo";
+  let overviewFilter = "all";
+  let dismissedGuides = new Set();
+  try { dismissedGuides = new Set(JSON.parse(localStorage.getItem("devhub_git_guides") || "[]")); } catch { /* ignore */ }
   const icon = name => `<i class="fa-solid fa-${name}" aria-hidden="true"></i>`;
   const selected = () => state.projects.find(p => p.id === state.activeGitProjectId);
   const session = id => {
     if (!sessions.has(id)) {
       let draft = {};
       try { draft = JSON.parse(sessionStorage.getItem(`devhub_git_draft_${id}`) || "{}"); } catch { /* invalid stored draft */ }
-      sessions.set(id, { tab: "changes", file: null, scope: "working", fileQuery: "", branchQuery: "", historyQuery: "", historyAll: false, historyFile: "", commit: null, wrap: false, advanced: false, excluded: new Set(), ...draft, summary: draft.summary || "", description: draft.description || "", amend: false });
+      sessions.set(id, { tab: "changes", file: null, scope: "working", fileQuery: "", branchQuery: "", historyQuery: "", historyAll: false, historyFile: "", commit: null, wrap: false, advanced: false, excluded: new Set(), collapsed: new Set(), ...draft, summary: draft.summary || "", description: draft.description || "", amend: false });
     }
     return sessions.get(id);
   };
@@ -28,11 +36,27 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
   const working = f => conflict(f) || f.worktreeStatus !== ".";
   const includedFiles = p => p.git.files.filter(f => !session(p.id).excluded.has(f.path));
   const count = (p, filter) => p.git.files.filter(filter).length;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const formatDate = date => date ? new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(date)) : "";
+  const ago = value => {
+    if (!value) return null;
+    const minutes = Math.round((Date.now() - new Date(value).getTime()) / 60000);
+    if (minutes < 1) return "gerade eben";
+    if (minutes < 60) return `vor ${plural(minutes, "Minute", "Minuten")}`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `vor ${plural(hours, "Stunde", "Stunden")}`;
+    const days = Math.round(hours / 24);
+    if (days === 1) return "gestern";
+    if (days < 30) return `vor ${days} Tagen`;
+    return `am ${formatDate(value)}`;
+  };
+  const initials = name => (name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join("") || "?";
+  const statusLabel = status => ({ M: "Geändert", A: "Neu", D: "Gelöscht", R: "Umbenannt", U: "Konflikt", C: "Kopiert", T: "Typ geändert", "?": "Neu" })[status] || status;
   const button = (label, action, attrs = "", disabled = false, style = "") => `<button type="button" class="gw-button ${style}" data-gw="${action}" ${attrs} ${disabled || busy ? "disabled" : ""}>${label}</button>`;
   const empty = (glyph, title, text, actions = "") => `<div class="gw-empty"><span class="gw-empty-icon">${icon(glyph)}</span><h3>${title}</h3><p>${text}</p>${actions}</div>`;
   const field = (label, name, value = "", options = "") => `<label class="gw-field"><span>${label}</span><input name="${name}" value="${esc(value)}" ${options}></label>`;
   const resourceError = value => value?.error ? `<div class="gw-resource-error" role="alert">${icon("triangle-exclamation")}<span>${esc(value.error)}</span>${button("Erneut laden", "refresh")}</div>` : "";
+  const operationName = op => ({ merge: "Merge", rebase: "Rebase", "cherry-pick": "Cherry-pick", revert: "Revert" })[op] || "Git-Vorgang";
 
   async function read(id, resource, url, force = false) {
     const k = key(id, resource);
@@ -60,6 +84,7 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const s = session(id);
     read(id, "workspace", "workspace");
     if (s.tab === "changes") {
+      if (p.git.files.length) read(id, "stats", "stats");
       const available = p.git.files.filter(s.advanced ? (s.scope === "staged" ? staged : working) : () => true);
       if (!available.some(f => f.path === s.file)) s.file = available[0]?.path || null;
       if (s.file) read(id, `diff:${s.advanced ? "index" : "all"}:${s.file}`, `diff?file=${encodeURIComponent(s.file)}&combined=${!s.advanced}`);
@@ -74,90 +99,273 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     }
   }
 
+  // One state machine decides what the sync segment, the guidance strip and the empty states say.
+  function syncState(p, w) {
+    const g = p.git;
+    if (w?.operation) return "operation";
+    if (count(p, conflict)) return "conflict";
+    if (!g.branch) return "detached";
+    if (!g.remoteName) return "noremote";
+    if (!g.lastCommit) return "nocommit";
+    if (!g.upstream) return "publish";
+    if (g.ahead && g.behind) return "diverged";
+    if (g.behind) return "behind";
+    if (g.ahead) return "ahead";
+    return "clean";
+  }
+  function syncInfo(p, w) {
+    const g = p.git; const key = syncState(p, w); const conflicts = count(p, conflict); const remote = g.remoteName || "origin";
+    const fetched = g.lastFetchAt ? `Zuletzt geholt ${ago(g.lastFetchAt)}` : "Noch nie vom Remote geholt";
+    const op = operationName(w?.operation);
+    const table = {
+      operation: { tone: "danger", glyph: "triangle-exclamation", title: conflicts ? "Konflikte lösen" : `${op} fortsetzen`, hint: conflicts ? `${op} angehalten · ${plural(conflicts, "Datei", "Dateien")} betroffen` : `${op} läuft · keine offenen Konflikte`, action: conflicts ? { label: "Abbrechen …", gw: "confirm-abort", style: "gw-danger-soft" } : { label: "Fortsetzen", gw: "continue", style: "gw-primary" }, dismissible: false,
+        guide: conflicts ? `<strong>${op} angehalten: ${plural(conflicts, "Datei hat", "Dateien haben")} Konflikte.</strong> Wähle links eine Datei mit <b class="gw-status status-U">!</b> und übernimm eine Version oder löse sie im Editor. „Abbrechen“ stellt den Stand von vor dem ${op} wieder her, nichts geht verloren.` : `<strong>Alle Konflikte sind gelöst.</strong> Mit „Fortsetzen“ schließt Git den ${op} ab.` },
+      conflict: { tone: "danger", glyph: "triangle-exclamation", title: "Konflikte lösen", hint: `${plural(conflicts, "Datei", "Dateien")} mit Konfliktmarkierungen`, action: null, dismissible: false,
+        guide: `<strong>${plural(conflicts, "Datei hat", "Dateien haben")} Konflikte.</strong> Übernimm pro Datei eine Version oder bearbeite sie im Editor und markiere sie danach als gelöst.` },
+      detached: { tone: "warn", glyph: "code-branch", title: "Kein Branch aktiv", hint: "Detached HEAD · Commits landen auf keinem Branch", action: { label: "Branch wählen", gw: "menu", attrs: 'data-value="branch"' }, dismissible: false,
+        guide: `<strong>Du arbeitest auf keinem Branch.</strong> Wechsle auf einen Branch oder erstelle einen neuen, damit deine Commits nicht verloren gehen.` },
+      noremote: { tone: "neutral", glyph: "cloud", title: "Remote hinzufügen", hint: "Dieses Repository existiert nur auf diesem Rechner", action: { label: "Remote hinzufügen", gw: "remote-add-dialog", style: "gw-primary" }, dismissible: true,
+        guide: `<strong>Nur lokal gesichert.</strong> Lege ein Remote an, um das Repository zu sichern oder zu teilen. Eine GitHub-, GitLab- oder SSH-URL reicht.` },
+      nocommit: { tone: "neutral", glyph: "code-commit", title: "Erster Commit", hint: "Noch keine Commits in diesem Repository", action: null, dismissible: true,
+        guide: `<strong>Dieses Repository hat noch keinen Commit.</strong> Wähle unten Dateien aus und schreibe eine Zusammenfassung, dann steht der erste Stand.` },
+      publish: { tone: "info", glyph: "cloud-arrow-up", title: `Auf ${remote} veröffentlichen`, hint: `Branch ${g.branch} ist noch nicht auf ${remote}`, action: { label: "Veröffentlichen", gw: "push", style: "gw-primary" }, dismissible: true,
+        guide: `<strong>„${esc(g.branch)}“ gibt es bisher nur hier.</strong> Veröffentlichen legt den Branch auf ${esc(remote)} an und verbindet ihn, danach reicht ein Push.` },
+      diverged: { tone: "danger", glyph: "code-compare", title: "Pull, dann Push", hint: `${g.ahead} voraus · ${g.behind} zurück · ${fetched}`, chip: `${icon("arrow-up")}${g.ahead} ${icon("arrow-down")}${g.behind}`, action: { label: "Pull …", gw: "pull-dialog", style: "gw-primary" }, dismissible: false,
+        guide: `<strong>„${esc(g.branch)}“ und ${esc(g.upstream)} sind auseinandergelaufen.</strong> Du hast ${plural(g.ahead, "Commit", "Commits")}, die das Remote nicht kennt, das Remote hat ${g.behind}, die dir fehlen. Hole zuerst, dann pushe. Rebase hält den Verlauf gerade, Merge behält beide Stränge.`,
+        actions: [["Pull mit Merge", "pull-method", 'data-value="merge"', ""], ["Pull mit Rebase", "pull-method", 'data-value="rebase"', "gw-primary"]] },
+      behind: { tone: "warn", glyph: "arrow-down", title: `Pull ${remote}`, hint: `${plural(g.behind, "neuer Commit", "neue Commits")} von ${g.upstream} · ${fetched}`, chip: `${icon("arrow-down")}${g.behind}`, action: { label: "Pull", gw: "pull", style: "gw-primary" }, dismissible: true,
+        guide: `<strong>${esc(g.upstream)} hat ${plural(g.behind, "Commit", "Commits")}, ${g.behind === 1 ? "der" : "die"} dir ${g.behind === 1 ? "fehlt" : "fehlen"}.</strong> Du hast keine eigenen Commits voraus, ein Pull ist gefahrlos und erzeugt keinen Merge-Commit.`,
+        actions: [["Was kommt rein?", "compare", `data-branch="${esc(g.upstream)}"`, ""]] },
+      ahead: { tone: "info", glyph: "arrow-up", title: `Push ${remote}`, hint: `${plural(g.ahead, "lokaler Commit", "lokale Commits")} hochladen · ${fetched}`, chip: `${icon("arrow-up")}${g.ahead}`, action: { label: "Push", gw: "push", style: "gw-primary" }, dismissible: true,
+        guide: `<strong>${plural(g.ahead, "Commit liegt", "Commits liegen")} nur auf diesem Rechner.</strong> Solange du nicht pushst, sieht ${g.ahead === 1 ? "ihn" : "sie"} niemand und ein Festplattenschaden nimmt ${g.ahead === 1 ? "ihn" : "sie"} mit.` },
+      clean: { tone: "ok", glyph: "arrows-rotate", title: `Fetch ${remote}`, hint: fetched, action: { label: "Fetch", gw: "fetch" }, dismissible: true,
+        guide: `<strong>Alles synchron.</strong> „${esc(g.branch)}“ und ${esc(g.upstream)} zeigen auf denselben Commit.${g.dirty ? ` ${plural(g.changedFiles, "Datei wartet", "Dateien warten")} auf einen Commit.` : ""}` }
+    };
+    return { key, ...table[key] };
+  }
+
   function repositoryRail(repositories) {
     const q = state.gitQuery.toLocaleLowerCase();
     const filtered = repositories.filter(p => `${p.name} ${p.relativePath} ${p.git.branch}`.toLocaleLowerCase().includes(q) && (repoFilter === "all" || (repoFilter === "changed" ? p.git.dirty : p.git.ahead || p.git.behind)));
+    const dirty = repositories.filter(p => p.git.dirty).length;
     return `<aside class="gw-repositories" aria-label="Repositories"><header><span>REPOSITORIES <b>${repositories.length}</b></span>${button(icon("plus"), "add", 'aria-label="Repository hinzufügen" title="Repository klonen oder anlegen"', false, "gw-icon-button")}</header>
       <label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="repoQuery" data-focus-key="gw-repo-search" aria-label="Repositories durchsuchen" placeholder="Repository suchen …" value="${esc(state.gitQuery)}"></label>
       <div class="gw-segments" aria-label="Repositories filtern">${[["all", "Alle"], ["changed", "Geändert"], ["sync", "Sync"]].map(([value, label]) => button(label, "filter", `data-value="${value}" aria-pressed="${repoFilter === value}"`, false, repoFilter === value ? "active" : "")).join("")}</div>
-      <div class="gw-repo-list" data-gw-scroll="repositories">${filtered.map(p => `<button class="gw-repo ${p.id === state.activeGitProjectId ? "active" : ""}" data-gw="repository" data-id="${p.id}" aria-pressed="${p.id === state.activeGitProjectId}"><span class="gw-repo-icon">${icon("book-bookmark")}</span><span><strong>${esc(p.name)}</strong><small>${icon("code-branch")} ${esc(p.git.branch || "Detached HEAD")}</small></span><span class="gw-repo-count ${p.git.files.some(conflict) ? "conflict" : p.git.dirty ? "dirty" : "clean"}">${p.git.dirty ? p.git.changedFiles : icon("check")}</span></button>`).join("") || `<p class="gw-list-empty">Keine passenden Repositories.</p>`}</div>
-      <footer><span class="gw-live-dot"></span><span>Lokaler Workspace</span><small>${repositories.filter(p => p.git.dirty).length} geändert</small></footer></aside>`;
+      <div class="gw-repo-list" data-gw-scroll="repositories">
+        <button class="gw-repo gw-repo-overview ${view === "overview" ? "active" : ""}" data-gw="overview" aria-pressed="${view === "overview"}"><span class="gw-repo-icon">${icon("table-cells-large")}</span><span><strong>Übersicht</strong><small>${plural(repositories.length, "Repository", "Repositories")}</small></span><span class="gw-repo-count ${dirty ? "dirty" : "clean"}">${dirty || icon("check")}</span></button>
+        ${filtered.map(p => `<button class="gw-repo ${view === "repo" && p.id === state.activeGitProjectId ? "active" : ""}" data-gw="repository" data-id="${p.id}" aria-pressed="${view === "repo" && p.id === state.activeGitProjectId}"><span class="gw-repo-icon">${icon("book-bookmark")}</span><span><strong>${esc(p.name)}</strong><small>${icon("code-branch")} ${esc(p.git.branch || "Detached HEAD")}${p.git.ahead ? ` <em class="ahead">↑${p.git.ahead}</em>` : ""}${p.git.behind ? ` <em class="behind">↓${p.git.behind}</em>` : ""}</small></span><span class="gw-repo-count ${p.git.files.some(conflict) ? "conflict" : p.git.dirty ? "dirty" : "clean"}">${p.git.files.some(conflict) ? icon("triangle-exclamation") : p.git.dirty ? p.git.changedFiles : icon("check")}</span></button>`).join("") || `<p class="gw-list-empty">Keine passenden Repositories.</p>`}</div>
+      <footer><span class="gw-live-dot"></span><span>Lokaler Workspace</span><small>${dirty} geändert</small></footer></aside>`;
   }
-  function toolbar(p, w) {
-    const g = p.git;
-    return `<header class="gw-toolbar"><div class="gw-repo-title"><span class="gw-repo-icon">${icon("book-bookmark")}</span><div><h2>${esc(p.name)}</h2><code title="${esc(p.relativePath)}">${esc(p.relativePath)}</code></div></div>
-      <button class="gw-current-branch" data-gw="tab" data-value="branches" title="Branches wechseln und verwalten">${icon("code-branch")}<span><small>Aktueller Branch</small><strong>${esc(g.branch || "Detached HEAD")}</strong></span>${icon("chevron-down")}</button>
-      <div class="gw-sync-actions">${button(icon(busy?.action === "fetch" ? "spinner fa-spin" : "rotate") + " Fetch", "fetch", 'title="Remote-Stand abrufen"', !g.remoteName)}${button(icon("arrow-down") + ` Pull${g.behind ? ` <b>${g.behind}</b>` : ""}`, "pull", 'title="Remote-Commits per Fast-forward übernehmen"', !g.upstream || !g.behind || !!w?.operation)}${button(icon("arrow-up") + (g.upstream ? ` Push${g.ahead ? ` <b>${g.ahead}</b>` : ""}` : " Veröffentlichen"), "push", 'title="Commits zum Remote übertragen"', !g.remoteName || !g.lastCommit || !g.branch || (!!g.upstream && !g.ahead) || !!w?.operation, "gw-primary")}</div>
-      <div class="gw-tools">${button(icon("code"), "editor", 'aria-label="Im Editor öffnen" title="Im Editor öffnen"', !state.capabilities?.editor.available, "gw-icon-button")}${button(icon("terminal"), "terminal", 'aria-label="Terminal öffnen" title="Terminal öffnen"', !state.capabilities?.terminal.available, "gw-icon-button")}${button(icon("rotate"), "refresh", 'aria-label="Git-Status aktualisieren" title="Aktualisieren · ⌘/Ctrl R"', false, "gw-icon-button")}</div></header>`;
+
+  // Header: repository · branch · the one sync action that fits the current state.
+  function header(p, w) {
+    const g = p.git; const info = syncInfo(p, w);
+    const syncing = busy && ["fetch", "pull", "push", "continue"].includes(busy.action);
+    const segment = (value, glyph, label, strong, code, title, popover) => `<div class="gw-seg-wrap"><button type="button" class="gw-seg gw-seg-menu ${menu === value ? "open" : ""}" data-gw="menu" data-value="${value}" aria-haspopup="dialog" aria-expanded="${menu === value}" title="${title}"><span class="gw-seg-icon">${icon(glyph)}</span><span class="gw-seg-copy"><small>${label}</small>${strong}${code}</span>${icon("chevron-down")}</button>${menu === value ? popover() : ""}</div>`;
+    return `<header class="gw-header">
+      ${segment("repo", "book-bookmark", "Repository", `<strong>${esc(p.name)}</strong>`, `<code title="${esc(p.relativePath)}">${esc(p.relativePath)}</code>`, "Repository wechseln", () => repoPopover(p))}
+      ${segment("branch", "code-branch", "Branch", `<strong class="gw-mono">${esc(g.branch || "Detached HEAD")}</strong>`, `<code>${g.upstream ? `verfolgt ${esc(g.upstream)}` : g.remoteName ? "noch kein Upstream" : "nur lokal"}</code>`, "Branch wechseln oder erstellen", () => branchPopover(p, w))}
+      <div class="gw-seg gw-seg-sync tone-${info.tone}"><span class="gw-seg-icon">${icon(syncing ? "spinner fa-spin" : info.glyph)}</span><span class="gw-seg-copy"><small>${info.hint}</small><strong>${esc(info.title)}</strong></span>${info.chip ? `<span class="gw-chip tone-${info.tone}">${info.chip}</span>` : ""}${info.action ? button(esc(info.action.label), info.action.gw, info.action.attrs || "", info.action.disabled, `gw-seg-action ${info.action.style || ""}`) : ""}</div>
+      <div class="gw-header-tools">${button(icon("code"), "editor", 'aria-label="Im Editor öffnen" title="Im Editor öffnen"', !state.capabilities?.editor.available, "gw-icon-button")}${button(icon("terminal"), "terminal", 'aria-label="Terminal öffnen" title="Terminal öffnen"', !state.capabilities?.terminal.available, "gw-icon-button")}${button(icon(busy?.action === "refresh" ? "spinner fa-spin" : "rotate"), "refresh", 'aria-label="Git-Status aktualisieren" title="Aktualisieren · ⌘/Ctrl R"', false, "gw-icon-button")}</div></header>`;
+  }
+  function repoPopover(p) {
+    const repositories = state.projects.filter(x => x.git).sort((a, b) => Number(Boolean(b.git.dirty)) - Number(Boolean(a.git.dirty)) || a.name.localeCompare(b.name, "de"));
+    const q = menuQuery.toLocaleLowerCase();
+    const rows = repositories.filter(x => `${x.name} ${x.relativePath}`.toLocaleLowerCase().includes(q));
+    return `<div class="gw-popover gw-popover-repo" role="dialog" aria-label="Repository wechseln">
+      <label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="menuQuery" data-focus-key="gw-menu-search" aria-label="Repository suchen" placeholder="Repository suchen …" value="${esc(menuQuery)}"></label>
+      <div class="gw-popover-list" data-gw-scroll="repo-menu">${rows.map(x => `<button type="button" class="gw-menu-row gw-menu-main ${x.id === p.id ? "current" : ""}" data-gw="repository" data-id="${x.id}">${icon(x.id === p.id ? "check" : "book-bookmark")}<span><strong>${esc(x.name)}</strong><small>${esc(x.git.branch || "Detached HEAD")} · ${x.git.dirty ? plural(x.git.changedFiles, "Änderung", "Änderungen") : "sauber"}${x.git.ahead ? ` · ↑${x.git.ahead}` : ""}${x.git.behind ? ` · ↓${x.git.behind}` : ""}</small></span></button>`).join("") || '<p class="gw-list-empty">Kein passendes Repository.</p>'}</div>
+      <footer>${button(icon("table-cells-large") + " Alle Repositories", "overview", "", false, "gw-link")}${button(icon("plus") + " Klonen oder anlegen …", "add", "", false, "gw-link")}</footer></div>`;
+  }
+  function branchPopover(p, w) {
+    const s = session(p.id); const g = p.git;
+    const q = s.branchQuery.trim(); const ql = q.toLocaleLowerCase();
+    const all = w?.branches || [];
+    const locals = all.filter(b => !b.remote);
+    const remotes = all.filter(b => b.remote && !locals.some(l => b.name.endsWith(`/${l.name}`)));
+    const matches = list => list.filter(b => b.name.toLocaleLowerCase().includes(ql));
+    const exact = all.some(b => b.name === q || b.name.endsWith(`/${q}`));
+    const row = b => `<div class="gw-menu-row ${b.current ? "current" : ""}"><button type="button" class="gw-menu-main" data-gw="${b.remote ? "checkout-remote" : "checkout"}" data-branch="${esc(b.name)}" ${b.current ? "disabled" : ""} title="${b.remote ? "Lokal auschecken" : b.current ? "Aktueller Branch" : "Zu diesem Branch wechseln"}">${icon(b.current ? "check" : b.remote ? "cloud" : "code-branch")}<span><strong class="gw-mono">${esc(b.name)}</strong><small>${b.current ? "aktuell" : b.remote ? "nur auf dem Remote" : b.upstream ? `verfolgt ${esc(b.upstream)}` : "nur lokal"}${b.lastCommitDate ? ` · ${ago(b.lastCommitDate)}` : ""}</small></span></button>${!b.current && g.branch ? button("Vergleichen", "compare", `data-branch="${esc(b.name)}" title="Änderungen gegenüber ${esc(g.branch)} zeigen"`, false, "gw-link") : ""}</div>`;
+    const creatable = q && !exact && g.lastCommit;
+    return `<div class="gw-popover gw-popover-branch" role="dialog" aria-label="Branches">
+      <label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="branchQuery" data-focus-key="gw-branch-search" aria-label="Branch suchen oder erstellen" placeholder="Branch suchen oder neu anlegen …" value="${esc(s.branchQuery)}" autocomplete="off"></label>
+      <div class="gw-popover-list" data-gw-scroll="branch-menu">${resourceError(w)}
+        ${creatable ? `<button type="button" class="gw-menu-row gw-menu-create gw-menu-main" data-gw="create-branch-now" data-branch="${esc(q)}">${icon("plus")}<span><strong>Branch „${esc(q)}“ erstellen</strong><small>von ${esc(g.branch || "HEAD")} · wechselt direkt dorthin</small></span><kbd>↵</kbd></button>` : ""}
+        ${!w ? '<p class="gw-list-empty">Branches werden geladen …</p>' : ""}
+        ${matches(locals).length ? `<p class="gw-menu-label">Lokal</p>${matches(locals).map(row).join("")}` : ""}
+        ${matches(remotes).length ? `<p class="gw-menu-label">Nur auf dem Remote</p>${matches(remotes).map(row).join("")}` : ""}
+        ${w && !creatable && !matches(locals).length && !matches(remotes).length ? '<p class="gw-list-empty">Kein passender Branch.</p>' : ""}</div>
+      <footer>${button(icon("diagram-project") + " Alle Branches verwalten", "tab", 'data-value="branches"', false, "gw-link")}${button(icon("plus") + " Neuer Branch …", "create-branch-dialog", "", !g.lastCommit, "gw-link")}</footer></div>`;
+  }
+  function morePopover(p, w) {
+    const canStash = p.git.dirty && !!p.git.lastCommit && !count(p, conflict);
+    const item = (glyph, label, action, attrs = "", meta = "", disabled = false) => `<button type="button" class="gw-menu-row gw-menu-main" data-gw="${action}" ${attrs} ${disabled || busy ? "disabled" : ""}>${icon(glyph)}<span><strong>${label}</strong></span>${meta ? `<small>${meta}</small>` : ""}</button>`;
+    return `<div class="gw-popover gw-popover-more" role="dialog" aria-label="Repository-Menü">
+      <p class="gw-menu-label">Verwalten</p>
+      ${item("diagram-project", "Branches …", "tab", 'data-value="branches"', `${w?.branches?.filter(b => !b.remote).length ?? ""}`)}
+      ${item("box-archive", "Stashes", "tab", 'data-value="stashes"', `${w?.stashes?.length || ""}`)}
+      ${item("tag", "Tags", "tab", 'data-value="tags"', `${w?.tags?.length || ""}`)}
+      ${item("sliders", "Remotes & Identität", "tab", 'data-value="settings"', w?.remotes?.[0]?.name || "")}
+      <p class="gw-menu-label">Aktionen</p>
+      ${item("box-archive", "Änderungen im Stash sichern …", "stash-save-dialog", "", "", !canStash)}
+      ${item("arrows-rotate", "Fetch", "fetch", "", "", !p.git.remoteName)}
+      ${item("arrow-down", "Pull", "pull", "", "", !p.git.upstream || !p.git.behind || !!w?.operation)}
+      ${item("arrow-up", p.git.upstream ? "Push" : "Veröffentlichen", "push", "", "", !p.git.remoteName || !p.git.lastCommit || !p.git.branch || (!!p.git.upstream && !p.git.ahead) || !!w?.operation)}
+      ${item("rotate-left", "Letzten Commit zurücknehmen …", "undo-dialog", "", "", !p.git.lastCommit || !p.git.branch || (!!p.git.upstream && !p.git.ahead) || !!w?.operation)}
+      <p class="gw-menu-label">Öffnen</p>
+      ${item("code", "Im Editor", "editor", "", "", !state.capabilities?.editor.available)}
+      ${item("terminal", "Im Terminal", "terminal", "", "", !state.capabilities?.terminal.available)}
+      ${item("folder-open", "Ordner zeigen", "folder")}
+      <p class="gw-menu-label">Workspace</p>
+      ${item("table-cells-large", "Alle Repositories", "overview")}
+      ${item("plus", "Repository klonen oder anlegen …", "add")}</div>`;
+  }
+
+  function guide(p, w) {
+    const info = syncInfo(p, w);
+    if (info.dismissible && dismissedGuides.has(info.key)) return "";
+    if (info.key === "clean" && !p.git.dirty && dismissedGuides.has("clean")) return "";
+    return `<div class="gw-guide tone-${info.tone}" role="status">${icon(info.glyph)}<p>${info.guide}</p><div class="gw-guide-actions">${(info.actions || []).map(([label, action, attrs, style]) => button(label, action, attrs, false, `gw-small ${style}`)).join("")}${info.dismissible ? button(icon("xmark"), "dismiss-guide", `data-value="${info.key}" aria-label="Hinweis nicht mehr zeigen" title="Für diesen Zustand nicht mehr zeigen"`, false, "gw-icon-button") : ""}</div></div>`;
   }
   function navigation(p, w) {
     const s = session(p.id);
-    const tabs = [["changes", "code-branch", "Änderungen", p.git.changedFiles], ["history", "clock-rotate-left", "Verlauf"], ["branches", "diagram-project", "Branches"], ["stashes", "box-archive", "Stashes", w?.stashes?.length], ["tags", "tag", "Tags"], ["settings", "sliders", "Repository"]];
-    return `<nav class="gw-tabs" aria-label="Git-Arbeitsbereich">${tabs.map(([value, glyph, label, total]) => button(`${icon(glyph)}<span>${label}</span>${total ? `<b>${total}</b>` : ""}`, "tab", `data-value="${value}" aria-pressed="${s.tab === value}"`, false, s.tab === value ? "active" : "")).join("")}<span class="gw-branch-status">${p.git.dirty ? '<i class="gw-dot dirty"></i> Änderungen vorhanden' : '<i class="gw-dot clean"></i> Arbeitsbaum sauber'}</span></nav>`;
+    const secondary = { branches: ["diagram-project", "Branches"], stashes: ["box-archive", "Stashes"], tags: ["tag", "Tags"], settings: ["sliders", "Repository"] }[s.tab];
+    const tab = (value, glyph, label, total) => button(`${icon(glyph)}<span>${label}</span>${total ? `<b>${total}</b>` : ""}`, "tab", `data-value="${value}" aria-pressed="${s.tab === value}"`, false, s.tab === value ? "active" : "");
+    return `<nav class="gw-tabs" aria-label="Git-Arbeitsbereich">${tab("changes", "pen-to-square", "Änderungen", p.git.changedFiles)}${tab("history", "clock-rotate-left", "Verlauf")}${secondary ? `<span class="gw-tab-secondary">${tab(s.tab, secondary[0], secondary[1])}${button(icon("xmark"), "tab", 'data-value="changes" aria-label="Zurück zu den Änderungen"', false, "gw-icon-button")}</span>` : ""}
+      <span class="gw-tabs-spacer"></span><span class="gw-branch-status">${p.git.dirty ? `<i class="gw-dot dirty"></i> ${plural(p.git.changedFiles, "Datei geändert", "Dateien geändert")}` : '<i class="gw-dot clean"></i> Arbeitsbaum sauber'}</span>
+      <span class="gw-more-wrap">${button(icon("ellipsis") + " Repository " + icon("chevron-down"), "menu", `data-value="more" aria-haspopup="menu" aria-expanded="${menu === "more"}"`, false, `gw-more ${menu === "more" ? "open" : ""}`)}${menu === "more" ? morePopover(p, w) : ""}</span></nav>`;
   }
-  function operationBanner(p, w) {
+
+  function commitStatus(p) {
+    const s = session(p.id); const w = data(p.id, "workspace");
+    const total = s.advanced ? count(p, staged) : includedFiles(p).length;
     const conflicts = count(p, conflict);
-    if (!w?.operation && !conflicts) return "";
-    return `<div class="gw-operation" role="status">${icon("triangle-exclamation")}<div><strong>${w?.operation ? `${esc(w.operation)} in Bearbeitung` : "Konflikte auflösen"}</strong><span>${conflicts ? `${conflicts} Datei${conflicts === 1 ? "" : "en"} mit Konflikten. Im Editor auflösen und anschließend vormerken.` : "Alle Konflikte sind vorgemerkt. Du kannst den Vorgang fortsetzen."}</span></div>${button("Änderungen zeigen", "tab", 'data-value="changes"')}${w?.operation ? button("Abbrechen …", "confirm-abort") + button("Fortsetzen", "continue", "", conflicts > 0, "gw-primary") : ""}</div>`;
+    if (["commit", "amend", "commit-files", "amend-files"].includes(busy?.action)) return { ready: false, total, label: "Commit läuft …" };
+    if (w?.operation) return { ready: false, total, label: `Erst ${operationName(w.operation)} abschließen` };
+    if (conflicts) return { ready: false, total, label: "Erst Konflikte lösen" };
+    if (s.summary.trim().length < 3) return { ready: false, total, label: s.summary.trim() ? "Zusammenfassung zu kurz" : "Zusammenfassung fehlt" };
+    if (!total && !(s.advanced && s.amend)) return { ready: false, total, label: s.advanced ? "Nichts vorgemerkt" : "Keine Datei ausgewählt" };
+    if (s.amend) return { ready: true, total, label: "Letzten Commit aktualisieren" };
+    return { ready: true, total, label: `Commit ${plural(total, "Datei", "Dateien")} auf ${p.git.branch || "HEAD"}` };
   }
+  const meterTone = summary => summary.length > 72 ? "over" : summary.length > 50 ? "long" : "ok";
   function composer(p) {
     const s = session(p.id);
     const w = data(p.id, "workspace");
-    const total = s.advanced ? count(p, staged) : includedFiles(p).length;
-    const ready = s.summary.trim().length >= 3 && (total > 0 || (s.advanced && s.amend)) && !count(p, conflict) && !w?.operation;
-    return `<form class="gw-composer" data-gw-form="commit"><div class="gw-composer-heading"><span>${icon("code-commit")} ${s.amend ? "Letzten Commit bearbeiten" : "Neuer Commit"}</span><small>${total} ${s.advanced ? "im Index" : "ausgewählt"}</small></div>
-      <div class="gw-summary-field"><input name="summary" data-gw-input="summary" data-focus-key="gw-summary" aria-label="Commit-Zusammenfassung" placeholder="Zusammenfassung (erforderlich)" value="${esc(s.summary)}" maxlength="200" autocomplete="off">${button(icon("wand-magic-sparkles"), "suggest", 'aria-label="Commit-Nachricht vorschlagen" title="Nachricht aus vorgemerkten Dateien vorschlagen"', !total, "gw-icon-button")}</div>
-      <textarea name="description" data-gw-input="description" data-focus-key="gw-description" aria-label="Commit-Beschreibung" placeholder="Beschreibung (optional)" maxlength="10000" rows="3">${esc(s.description)}</textarea>
-      <div class="gw-composer-options"><label><input type="checkbox" data-gw-input="amend" ${s.amend ? "checked" : ""} ${!p.git.lastCommit || !p.git.branch || (p.git.upstream && !p.git.ahead) || busy || w?.operation ? "disabled" : ""}> Letzten Commit ändern</label><span title="Tastenkürzel zum Committen">⌘ / Ctrl ↵</span></div>
-      <button type="submit" class="gw-button gw-primary gw-commit-submit" ${!ready || busy ? "disabled" : ""}>${icon(["commit", "amend", "commit-files", "amend-files"].includes(busy?.action) ? "spinner fa-spin" : "check")}<span>${s.amend ? "Commit aktualisieren" : `Commit auf ${esc(p.git.branch || "Detached HEAD")}`}</span></button>
-      <small class="gw-identity">${icon("circle-user")} ${esc(w?.identity?.name || "Commit-Identität einrichten")} ${!w?.identity?.name ? button("Einrichten", "tab", 'data-value="settings"', false, "gw-link") : ""}</small></form>`;
+    const status = commitStatus(p);
+    const excluded = s.advanced ? 0 : p.git.files.length - includedFiles(p).length;
+    return `<form class="gw-composer" data-gw-form="commit"><div class="gw-composer-heading"><span>${icon("code-commit")} ${s.amend ? "Letzten Commit bearbeiten" : "Neuer Commit"}</span><small>${s.advanced ? `${status.total} im Index` : `${status.total} von ${p.git.files.length} ausgewählt`}</small></div>
+      <div class="gw-composer-row"><span class="gw-avatar" title="${esc(w?.identity?.name || "Commit-Identität")}">${esc(initials(w?.identity?.name))}</span><div class="gw-composer-fields">
+      <div class="gw-summary-field"><input name="summary" data-gw-input="summary" data-focus-key="gw-summary" aria-label="Commit-Zusammenfassung" placeholder="Zusammenfassung der Änderung" value="${esc(s.summary)}" maxlength="200" autocomplete="off">${button(icon("wand-magic-sparkles"), "suggest", 'aria-label="Commit-Nachricht vorschlagen" title="Zusammenfassung aus den Änderungen vorschlagen"', !status.total, "gw-icon-button")}</div>
+      <div class="gw-summary-meter ${meterTone(s.summary)}" ${s.summary.length ? "" : "hidden"} aria-hidden="true"><i data-width="${Math.min(100, s.summary.length / 72 * 100)}"></i><span>${s.summary.length} / 72</span></div>
+      <textarea name="description" data-gw-input="description" data-focus-key="gw-description" aria-label="Commit-Beschreibung" placeholder="Beschreibung (optional)" maxlength="10000" rows="2">${esc(s.description)}</textarea></div></div>
+      <div class="gw-composer-options"><label><input type="checkbox" data-gw-input="amend" ${s.amend ? "checked" : ""} ${!p.git.lastCommit || !p.git.branch || (p.git.upstream && !p.git.ahead) || busy || w?.operation ? "disabled" : ""}> Letzten Commit ändern</label>${excluded ? `<span>${plural(excluded, "Datei", "Dateien")} ausgeschlossen</span>` : ""}</div>
+      <button type="submit" class="gw-button gw-primary gw-commit-submit" ${!status.ready || busy ? "disabled" : ""}>${icon(["commit", "amend", "commit-files", "amend-files"].includes(busy?.action) ? "spinner fa-spin" : "check")}<span>${esc(status.label)}</span><kbd>⌘↵</kbd></button>
+      <small class="gw-identity">${w?.identity?.name ? `als ${esc(w.identity.name)} · ${button("ändern", "tab", 'data-value="settings"', false, "gw-link")}` : `${icon("circle-user")} Commit-Identität fehlt ${button("Einrichten", "tab", 'data-value="settings"', false, "gw-link")}`}</small></form>`;
+  }
+  function refreshComposer(p) {
+    const s = session(p.id); const form = root.querySelector(".gw-composer"); if (!form) return;
+    const status = commitStatus(p); const submit = form.querySelector(".gw-commit-submit");
+    if (submit) { submit.disabled = !status.ready || !!busy; submit.querySelector("span").textContent = status.label; }
+    const meter = form.querySelector(".gw-summary-meter");
+    if (meter) { meter.hidden = !s.summary.length; meter.className = `gw-summary-meter ${meterTone(s.summary)}`; meter.querySelector("i").style.width = `${Math.min(100, s.summary.length / 72 * 100)}%`; meter.querySelector("span").textContent = `${s.summary.length} / 72`; }
+  }
+  function operationPanel(p, w) {
+    const conflicts = count(p, conflict); const op = operationName(w?.operation);
+    return `<div class="gw-operation-panel"><header>${icon("triangle-exclamation")}<div><strong>${w?.operation ? `${op} läuft` : "Konflikte lösen"}</strong><span>${conflicts ? `${plural(conflicts, "Datei", "Dateien")} mit Konflikten` : "Keine offenen Konflikte"}</span></div></header>
+      <p>${conflicts ? "Wähle links eine Datei mit Konflikt. Übernimm eine Version oder löse sie im Editor und markiere sie als gelöst." : w?.operation ? `Alle Konflikte gelöst. „Fortsetzen“ schließt den ${op} ab.` : "Alle Konflikte sind vorgemerkt."}</p>
+      ${w?.operation ? button(icon("check") + `<span>Fortsetzen${conflicts ? ` · noch ${plural(conflicts, "Konflikt", "Konflikte")}` : ""}</span>`, "continue", "", conflicts > 0, "gw-primary gw-commit-submit") : ""}
+      ${w?.operation ? button(`${op} abbrechen …`, "confirm-abort", "", false, "gw-danger-soft gw-block") : ""}
+      ${w?.operation ? `<small>Abbrechen stellt den Stand von vor dem ${op} wieder her. Deine bisherigen Commits bleiben erhalten.</small>` : ""}</div>`;
+  }
+
+  function fileRow(p, f, status, extra = "") {
+    const s = session(p.id);
+    const stats = data(p.id, "stats")?.[f.path];
+    const name = f.path.split("/").pop();
+    return `<div class="gw-file ${s.file === f.path ? "active" : ""} ${s.excluded.has(f.path) && !s.advanced ? "excluded" : ""} ${status === "U" ? "conflict" : ""}">${s.advanced ? "" : `<input type="checkbox" data-gw-input="includeFile" data-focus-key="gw-check-${esc(f.path)}" data-path="${esc(f.path)}" aria-label="${esc(f.path)} in Commit aufnehmen" ${s.excluded.has(f.path) ? "" : "checked"} ${busy ? "disabled" : ""}>`}
+      <button type="button" data-gw="file" data-path="${esc(f.path)}" aria-pressed="${s.file === f.path}" title="${esc(f.path)}"><b class="gw-status status-${esc(status)}" title="${esc(statusLabel(status))}">${status === "U" ? "!" : status === "?" ? "A" : esc(status)}</b><span class="gw-file-name"><strong>${esc(name)}</strong>${f.originalPath ? `<small>← ${esc(f.originalPath)}</small>` : ""}</span>${stats ? `<span class="gw-file-stats">${stats.binary ? "<em>binär</em>" : `${stats.additions ? `<b>+${stats.additions}</b>` : ""}${stats.deletions ? `<s>−${stats.deletions}</s>` : ""}`}</span>` : ""}</button>
+      <span class="gw-file-actions">${extra}</span></div>`;
+  }
+  function fileGroups(p, files, status, extra) {
+    const s = session(p.id);
+    const groups = new Map();
+    for (const f of files) { const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : ""; if (!groups.has(dir)) groups.set(dir, []); groups.get(dir).push(f); }
+    const dirs = [...groups.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b, "de")));
+    if (dirs.length === 1 && dirs[0] === "") return files.map(f => fileRow(p, f, status(f), extra(f))).join("");
+    return dirs.map(dir => `<div class="gw-file-group ${s.collapsed.has(dir) ? "collapsed" : ""}"><button type="button" class="gw-file-group-head" data-gw="fold" data-dir="${esc(dir)}" aria-expanded="${!s.collapsed.has(dir)}">${icon(s.collapsed.has(dir) ? "chevron-right" : "chevron-down")}<span>${dir ? esc(dir) : "Projektordner"}</span><b>${groups.get(dir).length}</b></button>${s.collapsed.has(dir) ? "" : groups.get(dir).map(f => fileRow(p, f, status(f), extra(f))).join("")}</div>`).join("");
   }
   function changeView(p) {
     const s = session(p.id);
-    if (s.advanced) return `<div class="gw-advanced-view"><div class="gw-advanced-note"><span>Erweiterter Modus · einzelne Abschnitte im Git-Index vorbereiten</span>${button("Zur Dateiauswahl", "simple-mode")}</div>${indexView(p)}</div>`;
+    const w = data(p.id, "workspace");
+    if (s.advanced) return indexView(p);
     const files = p.git.files;
     const visible = files.filter(f => f.path.toLocaleLowerCase().includes(s.fileQuery.toLocaleLowerCase()));
     const chosen = includedFiles(p).length;
     if (!files.some(f => f.path === s.file)) s.file = files[0]?.path || null;
-    return `<div class="gw-changes"><section class="gw-change-list"><header class="gw-quick-heading"><strong>Änderungen <b>${files.length}</b></strong>${button(icon("sliders"), "advanced-mode", 'aria-label="Erweiterte Auswahl einzelner Diff-Abschnitte" title="Erweitert: einzelne Diff-Abschnitte"', false, "gw-icon-button")}</header>
-      <label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="fileQuery" data-focus-key="gw-file-search" aria-label="Dateien filtern" placeholder="Dateien filtern …" value="${esc(s.fileQuery)}"></label>
-      <div class="gw-file-list-actions"><label class="gw-select-all"><input type="checkbox" data-gw-input="selectAll" data-focus-key="gw-check-all" aria-label="Alle Dateien für den Commit auswählen" ${chosen === files.length && files.length ? "checked" : ""} ${!files.length || busy ? "disabled" : ""}><span>${chosen} von ${files.length} ausgewählt</span></label></div>
-      <div class="gw-files" data-gw-scroll="files" aria-label="Dateien für den Commit">${visible.map(f => {
-        const name = f.path.split("/").pop(); const dir = f.path.slice(0, -name.length); const status = conflict(f) ? "U" : f.worktreeStatus === "?" ? "A" : f.worktreeStatus !== "." ? f.worktreeStatus : f.indexStatus;
-        return `<div class="gw-file gw-check-file ${s.file === f.path ? "active" : ""} ${s.excluded.has(f.path) ? "excluded" : ""}"><input type="checkbox" data-gw-input="includeFile" data-focus-key="gw-check-${esc(f.path)}" data-path="${esc(f.path)}" aria-label="${esc(f.path)} in Commit aufnehmen" ${s.excluded.has(f.path) ? "" : "checked"} ${busy ? "disabled" : ""}><button data-gw="file" data-path="${esc(f.path)}" aria-pressed="${s.file === f.path}" title="${esc(f.path)}"><span class="gw-file-name"><strong>${esc(name)}</strong>${dir ? `<small>${esc(dir)}</small>` : ""}${f.originalPath ? `<small>← ${esc(f.originalPath)}</small>` : ""}</span><b class="gw-status status-${esc(status)}">${esc(status)}</b></button>${button(icon("ellipsis"), "file-menu", `data-path="${esc(f.path)}" aria-label="Aktionen für ${esc(f.path)}" title="Datei oder Ordner ignorieren"`, false, "gw-icon-button")}</div>`;
-      }).join("") || `<div class="gw-list-empty">${files.length ? "Keine passenden Dateien." : "Keine Änderungen. Dein Arbeitsbaum ist sauber."}</div>`}${p.git.filesTruncated ? '<p class="gw-list-empty">Die ersten 500 Dateien werden angezeigt. Die Auswahl gilt für diese Dateien.</p>' : ""}</div>
-      <div class="gw-stash-shortcut">${button(icon("box-archive") + " Änderungen im Stash sichern …", "stash-save-dialog", "", !p.git.dirty || !p.git.lastCommit || !!count(p, conflict), "gw-link")}</div>${composer(p)}</section>${diffView(p)}</div>`;
+    const status = f => conflict(f) ? "U" : f.worktreeStatus === "?" ? "A" : f.worktreeStatus !== "." ? f.worktreeStatus : f.indexStatus;
+    const extra = f => button(icon("rotate-left"), "discard", `data-path="${esc(f.path)}" aria-label="Änderungen an ${esc(f.path)} verwerfen" title="Änderungen verwerfen …"`, false, "gw-icon-button gw-danger-link") + button(icon("ban"), "file-menu", `data-path="${esc(f.path)}" aria-label="${esc(f.path)} ignorieren" title="Datei oder Ordner ignorieren …"`, false, "gw-icon-button");
+    const inOperation = w?.operation || count(p, conflict);
+    return `<div class="gw-changes"><section class="gw-change-list"><header class="gw-list-head"><label class="gw-select-all"><input type="checkbox" data-gw-input="selectAll" data-focus-key="gw-check-all" aria-label="Alle Dateien für den Commit auswählen" ${chosen === files.length && files.length ? "checked" : ""} ${!files.length || busy || inOperation ? "disabled" : ""}><strong>${plural(files.length, "Datei", "Dateien")}</strong>${files.length ? `<small>${chosen} ausgewählt</small>` : ""}</label><span>${button(icon("layer-group"), "advanced-mode", 'aria-label="Einzelne Abschnitte vormerken" title="Index-Modus: einzelne Diff-Abschnitte vormerken"', false, "gw-icon-button")}</span></header>
+      ${files.length > 6 ? `<label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="fileQuery" data-focus-key="gw-file-search" aria-label="Dateien filtern" placeholder="Dateien filtern …" value="${esc(s.fileQuery)}"></label>` : ""}
+      <div class="gw-files" data-gw-scroll="files" aria-label="Dateien für den Commit">${visible.length ? fileGroups(p, visible, status, extra) : `<div class="gw-list-empty">${icon(files.length ? "magnifying-glass" : "check")}<strong>${files.length ? "Keine passenden Dateien" : "Keine Änderungen"}</strong><span>${files.length ? "Anderen Suchbegriff versuchen." : "Öffne das Projekt im Editor, dann erscheinen deine Änderungen hier."}</span></div>`}${p.git.filesTruncated ? '<p class="gw-list-empty">Die ersten 500 Dateien werden angezeigt. Die Auswahl gilt für diese Dateien.</p>' : ""}</div>
+      ${inOperation ? operationPanel(p, w) : composer(p)}</section>${diffView(p)}</div>`;
   }
   function indexView(p) {
     const s = session(p.id);
-    const files = p.git.files.filter(s.advanced ? (s.scope === "staged" ? staged : working) : () => true);
+    const w = data(p.id, "workspace");
+    const files = p.git.files.filter(s.scope === "staged" ? staged : working);
     if (!files.some(f => f.path === s.file)) s.file = files[0]?.path || null;
     const visible = files.filter(f => f.path.toLocaleLowerCase().includes(s.fileQuery.toLocaleLowerCase()));
-    const canStash = p.git.dirty && !!p.git.lastCommit && !count(p, conflict);
-    return `<div class="gw-changes"><section class="gw-change-list"><div class="gw-change-switch" aria-label="Änderungen filtern">${button(`Arbeitsbaum <b>${count(p, working)}</b>`, "scope", 'data-value="working"', false, s.scope === "working" ? "active" : "")}${button(`Vorgemerkt <b>${count(p, staged)}</b>`, "scope", 'data-value="staged"', false, s.scope === "staged" ? "active" : "")}</div>
-      <label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="fileQuery" data-focus-key="gw-file-search" aria-label="Dateien filtern" placeholder="Dateien filtern …" value="${esc(s.fileQuery)}"></label>
-      <div class="gw-file-list-actions"><span>${files.length} Datei${files.length === 1 ? "" : "en"}</span>${button(s.scope === "working" ? "Alle vormerken" : "Alle lösen", s.scope === "working" ? "stage-all" : "unstage-all", "", !files.length, "gw-link")}</div>
-      <div class="gw-files" data-gw-scroll="files" aria-label="Geänderte Dateien">${visible.map(f => {
-        const name = f.path.split("/").pop(); const dir = f.path.slice(0, -name.length); const status = conflict(f) ? "U" : s.scope === "staged" ? f.indexStatus : f.worktreeStatus;
-        return `<div class="gw-file ${s.file === f.path ? "active" : ""}"><button data-gw="file" data-path="${esc(f.path)}" aria-pressed="${s.file === f.path}" title="${esc(f.path)}"><span class="gw-file-type ${status === "U" ? "conflict" : ""}">${icon(status === "U" ? "triangle-exclamation" : "file-lines")}</span><span class="gw-file-name"><strong>${esc(name)}</strong>${dir ? `<small>${esc(dir)}</small>` : ""}${f.originalPath ? `<small>← ${esc(f.originalPath)}</small>` : ""}</span><b class="gw-status status-${esc(status)}" title="${esc(({ M: "Geändert", A: "Neu", D: "Gelöscht", R: "Umbenannt", U: "Konflikt", "?": "Neue Datei" })[status] || status)}">${status === "?" ? "A" : esc(status)}</b></button>${button(icon(s.scope === "staged" ? "minus" : "plus"), s.scope === "staged" ? "unstage-file" : "stage-file", `data-path="${esc(f.path)}" title="${s.scope === "staged" ? "Vormerkung lösen" : "Datei vormerken"}" aria-label="${s.scope === "staged" ? "Vormerkung lösen" : "Datei vormerken"}: ${esc(f.path)}"`, false, "gw-icon-button")}</div>`;
-      }).join("") || `<div class="gw-list-empty">${icon(files.length ? "magnifying-glass" : "check")}<strong>${files.length ? "Keine passenden Dateien" : s.scope === "staged" ? "Noch nichts vorgemerkt" : "Keine lokalen Änderungen"}</strong><span>${s.scope === "staged" ? "Mit + Dateien für den nächsten Commit vormerken." : "Hier erscheinen deine Änderungen."}</span></div>`}${p.git.filesTruncated ? '<p class="gw-list-empty">Die ersten 500 Dateien werden angezeigt. „Alle vormerken“ erfasst auch weitere Dateien.</p>' : ""}</div>
-      <div class="gw-stash-shortcut">${button(icon("box-archive") + " Änderungen im Stash sichern …", "stash-save-dialog", "", !canStash, "gw-link")}</div>${composer(p)}</section>${diffView(p)}</div>`;
+    const status = f => conflict(f) ? "U" : s.scope === "staged" ? f.indexStatus : f.worktreeStatus;
+    const extra = f => button(icon(s.scope === "staged" ? "minus" : "plus"), s.scope === "staged" ? "unstage-file" : "stage-file", `data-path="${esc(f.path)}" title="${s.scope === "staged" ? "Vormerkung lösen" : "Datei vormerken"}" aria-label="${s.scope === "staged" ? "Vormerkung lösen" : "Datei vormerken"}: ${esc(f.path)}"`, false, "gw-icon-button gw-visible");
+    const inOperation = w?.operation || count(p, conflict);
+    return `<div class="gw-changes"><section class="gw-change-list"><div class="gw-advanced-note"><span>${icon("layer-group")} Index-Modus · Abschnitte einzeln vormerken</span>${button("Zur Dateiauswahl", "simple-mode", "", false, "gw-link")}</div>
+      <div class="gw-change-switch" aria-label="Änderungen filtern">${button(`Arbeitsbaum <b>${count(p, working)}</b>`, "scope", 'data-value="working"', false, s.scope === "working" ? "active" : "")}${button(`Vorgemerkt <b>${count(p, staged)}</b>`, "scope", 'data-value="staged"', false, s.scope === "staged" ? "active" : "")}</div>
+      <div class="gw-file-list-actions"><span>${plural(files.length, "Datei", "Dateien")}</span>${button(s.scope === "working" ? "Alle vormerken" : "Alle lösen", s.scope === "working" ? "stage-all" : "unstage-all", "", !files.length, "gw-link")}</div>
+      <div class="gw-files" data-gw-scroll="files" aria-label="Geänderte Dateien">${visible.length ? fileGroups(p, visible, status, extra) : `<div class="gw-list-empty">${icon(files.length ? "magnifying-glass" : "check")}<strong>${files.length ? "Keine passenden Dateien" : s.scope === "staged" ? "Noch nichts vorgemerkt" : "Keine lokalen Änderungen"}</strong><span>${s.scope === "staged" ? "Mit + Dateien oder Abschnitte für den nächsten Commit vormerken." : "Hier erscheinen deine Änderungen."}</span></div>`}${p.git.filesTruncated ? '<p class="gw-list-empty">Die ersten 500 Dateien werden angezeigt. „Alle vormerken“ erfasst auch weitere Dateien.</p>' : ""}</div>
+      ${inOperation ? operationPanel(p, w) : composer(p)}</section>${diffView(p)}</div>`;
   }
   function patchView(patch, wrap = false) { return `<div class="gw-patch ${wrap ? "wrap" : ""}">${renderPatch(patch)}</div>`; }
+  function conflictBar(p, f, w) {
+    const rebase = w?.operation === "rebase";
+    return `<div class="gw-conflict-bar" role="status">${icon("triangle-exclamation")}<span><strong>Konflikt.</strong> ${rebase ? "Der Ziel-Branch und dein Commit ändern dieselben Zeilen." : "Beide Seiten ändern dieselben Zeilen."}</span>
+      ${button(rebase ? "Ziel-Branch behalten" : `Meine Version behalten`, "resolve-dialog", `data-path="${esc(f.path)}" data-side="ours" title="${rebase ? "Version des Branch, auf den rebased wird (git checkout --ours)" : `Version von ${esc(p.git.branch || "HEAD")} (git checkout --ours)`}"`, false, "gw-small")}
+      ${button(rebase ? "Meinen Commit übernehmen" : "Eingehende Version übernehmen", "resolve-dialog", `data-path="${esc(f.path)}" data-side="theirs" title="${rebase ? "Version aus deinem Commit (git checkout --theirs)" : "Version des integrierten Branch (git checkout --theirs)"}"`, false, "gw-small")}
+      ${button(icon("code") + " Im Editor lösen", "editor", "", !state.capabilities?.editor.available, "gw-small")}${button("Als gelöst markieren", "stage-file", `data-path="${esc(f.path)}" title="Datei ohne Konfliktmarkierungen vormerken"`, false, "gw-small gw-primary")}</div>`;
+  }
   function diffView(p) {
     const s = session(p.id);
+    const w = data(p.id, "workspace");
     const f = p.git.files.find(f => f.path === s.file);
-    if (!f) return `<section class="gw-diff">${empty(s.scope === "staged" ? "layer-group" : "check", s.scope === "staged" ? "Bereit für deinen nächsten Commit" : "Alles auf dem aktuellen Stand", s.scope === "staged" ? "Merke Dateien oder einzelne Abschnitte im Arbeitsbaum vor. Hier prüfst du genau das, was dein Commit enthalten wird." : "Dein Arbeitsbaum ist sauber. Starte eine neue Änderung, wechsle den Branch oder sieh dir den Verlauf an.", button(icon("clock-rotate-left") + " Verlauf ansehen", "tab", 'data-value="history"'))}</section>`;
+    if (!f) {
+      const info = syncInfo(p, w);
+      const emptyByState = {
+        clean: ["check", "Alles synchron", `Arbeitsbaum sauber, ${esc(p.git.branch || "HEAD")} entspricht ${esc(p.git.upstream || "dem Remote")}.`, button(icon("clock-rotate-left") + " Verlauf ansehen", "tab", 'data-value="history"')],
+        ahead: ["arrow-up", `${plural(p.git.ahead, "Commit wartet", "Commits warten")} auf den Push`, `Zuletzt: „${esc(p.git.lastCommit?.subject || "")}“`, button(icon("arrow-up") + " Jetzt pushen", "push", "", false, "gw-primary")],
+        behind: ["arrow-down", `${plural(p.git.behind, "neuer Commit", "neue Commits")} auf ${esc(p.git.upstream || "dem Remote")}`, "Ein Pull übernimmt sie per Fast-forward, ohne Merge-Commit.", button("Was kommt rein?", "compare", `data-branch="${esc(p.git.upstream || "")}"`) + button(icon("arrow-down") + " Pull", "pull", "", false, "gw-primary")],
+        diverged: ["code-compare", "Erst holen, dann pushen", "Nach dem Pull zeigt DevHub, ob Konflikte entstanden sind.", button("Pull …", "pull-dialog", "", false, "gw-primary")],
+        publish: ["cloud-arrow-up", `„${esc(p.git.branch || "")}“ gibt es nur hier`, `Veröffentlichen legt den Branch auf ${esc(p.git.remoteName || "dem Remote")} an.`, button(icon("cloud-arrow-up") + " Veröffentlichen", "push", "", false, "gw-primary")],
+        noremote: ["cloud", "Noch nirgends gesichert", p.git.lastCommit ? `Letzter Commit ${ago(p.git.lastCommit.date)}, nur auf diesem Rechner.` : "Dieses Repository existiert nur lokal.", button(icon("cloud") + " Remote hinzufügen", "remote-add-dialog", "", false, "gw-primary")],
+        nocommit: ["code-commit", "Bereit für den ersten Commit", "Sobald Dateien im Projekt liegen, erscheinen sie links.", ""],
+        detached: ["code-branch", "Kein Branch aktiv", "Wähle einen Branch, damit Commits einen Platz haben.", button(icon("code-branch") + " Branch wählen", "menu", 'data-value="branch"')],
+        operation: ["triangle-exclamation", `${operationName(w?.operation)} läuft`, "Links stehen die betroffenen Dateien.", ""],
+        conflict: ["triangle-exclamation", "Konflikte offen", "Links stehen die betroffenen Dateien.", ""]
+      };
+      const [glyph, title, text, actions] = s.advanced && s.scope === "staged" ? ["layer-group", "Bereit für deinen nächsten Commit", "Merke Dateien oder einzelne Abschnitte im Arbeitsbaum vor. Hier prüfst du genau das, was dein Commit enthalten wird.", ""] : emptyByState[info.key] || emptyByState.clean;
+      return `<section class="gw-diff">${empty(glyph, title, text, actions)}</section>`;
+    }
     const result = data(p.id, `diff:${s.advanced ? "index" : "all"}:${f.path}`);
     const section = result?.sections?.find(section => section.scope === (s.advanced ? s.scope : "working"));
     const patch = section?.patch || "";
     const additions = patch.split("\n").filter(l => /^\+(?!\+\+)/.test(l)).length;
     const deletions = patch.split("\n").filter(l => /^-(?!--)/.test(l)).length;
-    const title = `<header class="gw-diff-header"><div>${icon("file-code")}<strong title="${esc(f.path)}">${esc(f.path)}</strong><span class="gw-diff-stats"><b>+${additions}</b><b>−${deletions}</b></span></div><div>${button(icon("text-width"), "wrap", `aria-label="Zeilenumbruch umschalten" title="Lange Zeilen umbrechen" aria-pressed="${s.wrap}"`, false, "gw-icon-button")}${button(icon("copy"), "copy-file", 'aria-label="Dateipfad kopieren" title="Dateipfad kopieren"', false, "gw-icon-button")}${button(icon("ban") + " Ignorieren …", "file-menu", `data-path="${esc(f.path)}"`, false, "gw-link")}${button(icon("rotate-left") + " Verwerfen …", "discard", `data-path="${esc(f.path)}"`, false, "gw-danger-link")}</div></header>`;
+    const status = conflict(f) ? "U" : f.worktreeStatus === "?" ? "A" : f.worktreeStatus !== "." ? f.worktreeStatus : f.indexStatus;
+    const title = `<header class="gw-diff-header"><div><b class="gw-status status-${esc(status)}">${status === "U" ? "!" : status === "?" ? "A" : esc(status)}</b><strong title="${esc(f.path)}">${esc(f.path)}</strong><span class="gw-diff-stats"><b>+${additions}</b><b>−${deletions}</b></span></div><div>${button(icon("text-width"), "wrap", `aria-label="Zeilenumbruch umschalten" title="Lange Zeilen umbrechen" aria-pressed="${s.wrap}"`, false, `gw-icon-button ${s.wrap ? "active" : ""}`)}${button(icon("copy"), "copy-file", 'aria-label="Dateipfad kopieren" title="Dateipfad kopieren"', false, "gw-icon-button")}${button(icon("code"), "editor", 'aria-label="Im Editor öffnen" title="Im Editor öffnen"', !state.capabilities?.editor.available, "gw-icon-button")}${button(icon("ban") + " Ignorieren …", "file-menu", `data-path="${esc(f.path)}"`, false, "gw-link")}${button(icon("rotate-left") + " Verwerfen …", "discard", `data-path="${esc(f.path)}"`, false, "gw-danger-link")}</div></header>`;
     let content;
     if (result?.error) content = resourceError(result);
     else if (!result) content = empty("spinner fa-spin", "Diff wird geladen", "Änderungen werden eingelesen …");
-    else if (/^Binary files |^GIT binary patch/m.test(patch)) content = empty("file-image", "Binärdatei geändert", "Für diese Datei ist kein Textvergleich verfügbar. Du kannst sie als Ganzes vormerken oder im Editor öffnen.", button("Im Editor öffnen", "editor"));
+    else if (/^Binary files |^GIT binary patch/m.test(patch)) content = empty("file-image", "Binärdatei geändert", "Für diese Datei ist kein Textvergleich verfügbar. Du kannst sie als Ganzes committen oder im Editor öffnen.", button("Im Editor öffnen", "editor"));
     else if (!patch) content = empty("file-lines", "Kein Text-Diff vorhanden", "Die Änderung betrifft Dateimetadaten, einen Submodul-Verweis oder eine leere Datei.");
     else {
       const start = patch.indexOf("\n@@ ");
@@ -165,7 +373,8 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
       const canHunk = s.advanced && !section.truncated && !/^(old|new) mode /m.test(patch) && !f.originalPath && !conflict(f) && ["M", "."].includes(f.indexStatus) && ["M", "."].includes(f.worktreeStatus) && hunks.length;
       content = canHunk ? hunks.map((hunk, index) => `<section class="gw-hunk"><header><span>Abschnitt ${index + 1} von ${hunks.length}</span>${button(icon(s.scope === "staged" ? "minus" : "plus") + (s.scope === "staged" ? " Abschnitt lösen" : " Abschnitt vormerken"), "hunk", `data-index="${index}"`, false, "gw-link")}</header>${patchView(hunk, s.wrap)}</section>`).join("") : patchView(patch, s.wrap);
     }
-    return `<section class="gw-diff">${title}${conflict(f) ? `<div class="gw-conflict-guide">${icon("triangle-exclamation")}<span>Konflikt im Editor bearbeiten, Konfliktmarkierungen entfernen und die Datei als gelöst markieren.</span>${button("Editor öffnen", "editor")}</div>` : ""}<div class="gw-diff-content" data-gw-scroll="diff">${content}${section?.truncated ? '<p class="gw-limit">Großer Diff gekürzt. Für den vollständigen Inhalt den Editor öffnen.</p>' : ""}</div><footer class="gw-diff-footer"><span>${s.advanced ? (s.scope === "staged" ? "Index · Inhalt des nächsten Commits" : "Arbeitsbaum") : s.excluded.has(f.path) ? "Vom nächsten Commit ausgeschlossen" : "Im nächsten Commit enthalten"}</span>${conflict(f) ? button("Als gelöst markieren", "stage-file", `data-path="${esc(f.path)}"`) : s.advanced ? button(s.scope === "staged" ? "Datei aus Index lösen" : "Datei in Index aufnehmen", s.scope === "staged" ? "unstage-file" : "stage-file", `data-path="${esc(f.path)}"`, false, "gw-link") : button(s.excluded.has(f.path) ? "In Commit aufnehmen" : "Von Commit ausschließen", "toggle-include", `data-path="${esc(f.path)}"`, false, "gw-link")}</footer></section>`;
+    const footer = conflict(f) ? "" : `<footer class="gw-diff-footer"><span>${s.advanced ? (s.scope === "staged" ? "Index · Inhalt des nächsten Commits" : "Arbeitsbaum") : s.excluded.has(f.path) ? "Vom nächsten Commit ausgeschlossen" : "Im nächsten Commit enthalten"}</span>${s.advanced ? button(s.scope === "staged" ? "Datei aus Index lösen" : "Datei in Index aufnehmen", s.scope === "staged" ? "unstage-file" : "stage-file", `data-path="${esc(f.path)}"`, false, "gw-link") : button(s.excluded.has(f.path) ? "In Commit aufnehmen" : "Von Commit ausschließen", "toggle-include", `data-path="${esc(f.path)}"`, false, "gw-link")}</footer>`;
+    return `<section class="gw-diff">${title}${conflict(f) ? conflictBar(p, f, w) : ""}<div class="gw-diff-content" data-gw-scroll="diff">${content}${section?.truncated ? '<p class="gw-limit">Großer Diff gekürzt. Für den vollständigen Inhalt den Editor öffnen.</p>' : ""}</div>${footer}</section>`;
   }
 
   function historyView(p) {
@@ -175,17 +384,19 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const detail = s.commit ? data(p.id, `commit:${s.commit}:${s.historyFile}`) : null;
     const current = history?.commits?.find(c => c.hash === s.commit);
     const detailPatch = detail?.patch;
-    return `<div class="gw-history"><aside class="gw-history-list"><label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="historyQuery" data-focus-key="gw-history-search" aria-label="Commits durchsuchen" placeholder="Commit-Nachricht suchen …" value="${esc(s.historyQuery)}"></label><label class="gw-history-all"><input type="checkbox" data-gw-input="historyAll" ${s.historyAll ? "checked" : ""}> Alle Branches anzeigen</label><div class="gw-commits" data-gw-scroll="commits">${resourceError(history)}${history?.commits?.map(c => `<button data-gw="commit-detail" data-hash="${c.hash}" class="gw-history-row ${s.commit === c.hash ? "active" : ""}" aria-pressed="${s.commit === c.hash}"><span class="gw-graph-node ${c.parents.length > 1 ? "merge" : ""}">${icon(c.parents.length > 1 ? "code-merge" : "code-commit")}</span><span><strong>${esc(c.subject)}</strong><small>${esc(c.author)} · ${formatDate(c.date)}</small><code>${esc(c.shortHash)}</code></span></button>`).join("") || (!history ? '<p class="gw-list-empty">Verlauf wird geladen …</p>' : '<p class="gw-list-empty">Keine Commits gefunden.</p>')}</div>${history?.hasMore ? button("Weitere Commits laden", "history-more", "", pendingReads.has(key(p.id, "history-more")), "gw-history-more") : ""}</aside>
-      <section class="gw-history-detail">${detail?.error ? resourceError(detail) : detail ? `<header class="gw-commit-detail-header"><div class="gw-commit-caption">${icon("code-commit")} COMMIT <button class="gw-hash" data-gw="copy-hash" title="Vollständigen Commit-Hash kopieren">${esc(detail.shortHash)} ${icon("copy")}</button>${detail.parents.length > 1 ? '<span class="gw-badge">Merge</span>' : ""}</div><h3>${esc(detail.subject)}</h3><p>${esc(detail.author)} <span>· ${formatDate(detail.date)} · ${detail.files.length} Dateien</span></p>${detail.body ? `<pre class="gw-commit-body">${esc(detail.body)}</pre>` : ""}<div class="gw-inline-actions">${button(icon("rotate-left") + " Revert …", "revert-dialog", `data-hash="${detail.hash}"`, p.git.dirty || detail.parents.length > 1)}${button(icon("code-commit") + " Cherry-pick …", "cherry-pick-dialog", `data-hash="${detail.hash}"`, p.git.dirty || detail.parents.length > 1)}${button(icon("tag") + " Tag erstellen …", "create-tag-dialog", `data-hash="${detail.hash}"`)}</div></header>
-      <label class="gw-commit-file-select"><span>${icon("file-lines")} Änderungen</span><select data-gw-input="historyFile" aria-label="Datei im Commit auswählen"><option value="">Alle ${detail.files.length} Dateien</option>${detail.files.map(f => `<option value="${esc(f.path)}" ${s.historyFile === f.path ? "selected" : ""}>${esc(f.status)} · ${esc(f.path)}</option>`).join("")}</select></label><div class="gw-diff-content" data-gw-scroll="history-diff">${detailPatch ? patchView(detailPatch, s.wrap) : empty("file-lines", "Kein Text-Diff", "Für diese Auswahl ist kein Textvergleich verfügbar.")}${detail.truncated ? '<p class="gw-limit">Großer Commit-Diff wurde gekürzt.</p>' : ""}</div>` : empty(current ? "spinner fa-spin" : "clock-rotate-left", current ? "Commit wird geladen" : "Deine Projektgeschichte", "Wähle einen Commit, um Nachricht, Dateien und Änderungen zu prüfen.")}</section></div>`;
+    return `<div class="gw-history"><aside class="gw-history-list"><label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gw-input="historyQuery" data-focus-key="gw-history-search" aria-label="Commits durchsuchen" placeholder="Nachricht suchen …" value="${esc(s.historyQuery)}"></label><label class="gw-history-all"><input type="checkbox" data-gw-input="historyAll" ${s.historyAll ? "checked" : ""}> Alle Branches anzeigen</label><div class="gw-commits" data-gw-scroll="commits">${resourceError(history)}
+      ${p.git.dirty && !s.historyQuery ? `<button type="button" class="gw-history-row gw-history-pending" data-gw="tab" data-value="changes"><span class="gw-graph-node pending">${icon("pen-to-square")}</span><span><strong>${plural(p.git.changedFiles, "Änderung", "Änderungen")}, noch nicht committet</strong><small>Zu den Änderungen wechseln</small></span></button>` : ""}
+      ${history?.commits?.map((c, index) => `<button type="button" data-gw="commit-detail" data-hash="${c.hash}" class="gw-history-row ${s.commit === c.hash ? "active" : ""}" aria-pressed="${s.commit === c.hash}"><span class="gw-graph-node ${c.parents.length > 1 ? "merge" : ""}"><span class="gw-avatar" title="${esc(c.author)}">${esc(initials(c.author))}</span></span><span><strong>${esc(c.subject)}</strong><small>${esc(c.author)} · ${ago(c.date)} · <code>${esc(c.shortHash)}</code>${index === 0 && !s.historyAll && p.git.branch ? ` <em class="gw-ref">${esc(p.git.branch)}</em>` : ""}${c.parents.length > 1 ? ' <em class="gw-ref merge">Merge</em>' : ""}</small></span></button>`).join("") || (!history ? '<p class="gw-list-empty">Verlauf wird geladen …</p>' : '<p class="gw-list-empty">Keine Commits gefunden.</p>')}</div>${history?.hasMore ? button("Weitere Commits laden", "history-more", "", pendingReads.has(key(p.id, "history-more")), "gw-history-more") : ""}</aside>
+      <section class="gw-history-detail">${detail?.error ? resourceError(detail) : detail ? `<header class="gw-commit-detail-header"><div class="gw-commit-caption"><span class="gw-avatar">${esc(initials(detail.author))}</span><span>${esc(detail.author)} · ${formatDate(detail.date)}</span><button type="button" class="gw-hash" data-gw="copy-hash" title="Vollständigen Commit-Hash kopieren">${esc(detail.shortHash)} ${icon("copy")}</button>${detail.parents.length > 1 ? '<span class="gw-badge">Merge</span>' : ""}</div><h3>${esc(detail.subject)}</h3>${detail.body ? `<pre class="gw-commit-body">${esc(detail.body)}</pre>` : ""}<div class="gw-inline-actions">${button(icon("rotate-left") + " Revert …", "revert-dialog", `data-hash="${detail.hash}"`, p.git.dirty || detail.parents.length > 1)}${button(icon("code-commit") + " Cherry-pick …", "cherry-pick-dialog", `data-hash="${detail.hash}"`, p.git.dirty || detail.parents.length > 1)}${button(icon("tag") + " Tag erstellen …", "create-tag-dialog", `data-hash="${detail.hash}"`)}</div></header>
+      <label class="gw-commit-file-select"><span>${icon("file-lines")} ${plural(detail.files.length, "Datei", "Dateien")}</span><select data-gw-input="historyFile" aria-label="Datei im Commit auswählen"><option value="">Alle ${detail.files.length} Dateien</option>${detail.files.map(f => `<option value="${esc(f.path)}" ${s.historyFile === f.path ? "selected" : ""}>${esc(f.status)} · ${esc(f.path)}</option>`).join("")}</select></label><div class="gw-diff-content" data-gw-scroll="history-diff">${detailPatch ? patchView(detailPatch, s.wrap) : empty("file-lines", "Kein Text-Diff", "Für diese Auswahl ist kein Textvergleich verfügbar.")}${detail.truncated ? '<p class="gw-limit">Großer Commit-Diff wurde gekürzt.</p>' : ""}</div>` : empty(current ? "spinner fa-spin" : "clock-rotate-left", current ? "Commit wird geladen" : "Deine Projektgeschichte", "Wähle einen Commit, um Nachricht, Dateien und Änderungen zu prüfen.")}</section></div>`;
   }
   function branchView(p, w) {
     const s = session(p.id);
     const branches = (w?.branches || []).filter(b => b.name.toLocaleLowerCase().includes(s.branchQuery.toLocaleLowerCase()));
     const row = b => `<article class="gw-branch-row"><span class="gw-branch-glyph ${b.current ? "current" : ""}">${icon(b.remote ? "cloud" : "code-branch")}</span><div class="gw-row-copy"><strong>${esc(b.name)} ${b.current ? '<span class="gw-badge">Aktuell</span>' : ""}</strong><small>${b.upstream ? `Verfolgt ${esc(b.upstream)} · ` : ""}${formatDate(b.lastCommitDate)}</small></div><div class="gw-row-actions">${!b.current ? button(b.remote ? "Lokal auschecken" : "Wechseln", b.remote ? "checkout-remote" : "checkout", `data-branch="${esc(b.name)}"`) + button("Vergleichen", "compare", `data-branch="${esc(b.name)}"`) : ""}${!b.current && p.git.branch ? button("Integrieren …", "integrate-dialog", `data-branch="${esc(b.name)}"`, p.git.dirty || !!w?.operation) : ""}${!b.remote ? button(icon("pen"), "rename-branch-dialog", `data-branch="${esc(b.name)}" aria-label="Branch ${esc(b.name)} umbenennen" title="Branch umbenennen"`, false, "gw-icon-button") : ""}${!b.current && !b.remote ? button(icon("trash-can"), "delete-branch-dialog", `data-branch="${esc(b.name)}" aria-label="Branch ${esc(b.name)} löschen" title="Zusammengeführten Branch löschen"`, false, "gw-icon-button gw-danger-link") : ""}</div></article>`;
-    return `<section class="gw-management"><header class="gw-section-heading"><div><h3>Branches</h3><p>Arbeitsstände wechseln, vergleichen und zusammenführen.</p></div>${button(icon("plus") + " Neuer Branch", "create-branch-dialog", "", false, "gw-primary")}</header><label class="gw-search gw-management-search">${icon("magnifying-glass")}<input type="search" data-gw-input="branchQuery" data-focus-key="gw-branch-search" aria-label="Branches durchsuchen" placeholder="Branch suchen …" value="${esc(s.branchQuery)}"></label>${resourceError(w)}
-      ${[false, true].map(remote => `<section class="gw-card"><header><h4>${remote ? "Remote-Branches" : "Lokale Branches"}</h4><span>${branches.filter(b => !!b.remote === remote).length}</span></header>${branches.filter(b => !!b.remote === remote).map(row).join("") || `<p class="gw-card-note">${remote ? "Keine Remote-Branches. Mit Fetch den aktuellen Stand abrufen." : "Keine passenden lokalen Branches."}</p>`}</section>`).join("")}
-      ${s.comparison ? `<section class="gw-card gw-comparison"><header><div><h4>Änderungen aus ${esc(s.comparison)}</h4><p>Vergleich seit dem gemeinsamen Ausgangscommit mit ${esc(p.git.branch || "HEAD")}.</p></div>${button("Schließen", "close-comparison")}</header>${resourceError(data(p.id, `compare:${s.comparison}`))}${data(p.id, `compare:${s.comparison}`)?.patch ? patchView(data(p.id, `compare:${s.comparison}`).patch) : '<p class="gw-card-note">Keine Textänderungen oder Vergleich wird geladen …</p>'}</section>` : ""}</section>`;
+    return `<section class="gw-management"><header class="gw-section-heading"><div><h3>Branches</h3><p>Arbeitsstände wechseln, vergleichen und zusammenführen. Zum schnellen Wechseln reicht das Branch-Menü im Kopf.</p></div>${button(icon("plus") + " Neuer Branch", "create-branch-dialog", "", false, "gw-primary")}</header><label class="gw-search gw-management-search">${icon("magnifying-glass")}<input type="search" data-gw-input="branchQuery" data-focus-key="gw-branch-search" aria-label="Branches durchsuchen" placeholder="Branch suchen …" value="${esc(s.branchQuery)}"></label>${resourceError(w)}
+      ${s.comparison ? `<section class="gw-card gw-comparison"><header><div><h4>Änderungen aus ${esc(s.comparison)}</h4><p>Vergleich seit dem gemeinsamen Ausgangscommit mit ${esc(p.git.branch || "HEAD")}.</p></div>${button("Schließen", "close-comparison")}</header>${resourceError(data(p.id, `compare:${s.comparison}`))}${data(p.id, `compare:${s.comparison}`)?.patch ? patchView(data(p.id, `compare:${s.comparison}`).patch) : '<p class="gw-card-note">Keine Textänderungen oder Vergleich wird geladen …</p>'}</section>` : ""}
+      ${[false, true].map(remote => `<section class="gw-card"><header><h4>${remote ? "Remote-Branches" : "Lokale Branches"}</h4><span>${branches.filter(b => !!b.remote === remote).length}</span></header>${branches.filter(b => !!b.remote === remote).map(row).join("") || `<p class="gw-card-note">${remote ? "Keine Remote-Branches. Mit Fetch den aktuellen Stand abrufen." : "Keine passenden lokalen Branches."}</p>`}</section>`).join("")}</section>`;
   }
   function stashView(p, w) {
     const s = session(p.id);
@@ -202,6 +413,37 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
       <section class="gw-card"><header><h4>${icon("rotate-left")} Letzter Commit</h4></header><div class="gw-settings-form"><strong>${esc(p.git.lastCommit?.subject || "Noch keine Commits")}</strong><p>Den letzten lokalen Commit zurücknehmen. Seine Änderungen bleiben im Index vorgemerkt.</p>${button("Letzten Commit zurücknehmen …", "undo-dialog", "", !p.git.lastCommit || !p.git.branch || (!!p.git.upstream && !p.git.ahead) || !!w?.operation)}</div></section>
       <section class="gw-card"><header><h4>${icon("list-check")} Aktivität dieser Sitzung</h4></header><div class="gw-activity">${activity.filter(a => a.id === p.id).slice(0, 12).map(a => `<div class="${a.error ? "error" : ""}">${icon(a.error ? "circle-exclamation" : "circle-check")}<span>${esc(a.message)}</span><time>${a.time}</time></div>`).join("") || '<p class="gw-card-note">Git-Aktionen und ihre Ergebnisse erscheinen hier.</p>'}</div></section></div></section>`;
   }
+
+  // Overview: every repository of the workspace in one table with its state and the one action that is due.
+  function overviewView(repositories) {
+    const conflicts = p => p.git.files.some(conflict);
+    const kind = p => conflicts(p) ? "conflict" : !p.git.remoteName ? "noremote" : !p.git.upstream && p.git.lastCommit ? "publish" : p.git.ahead && p.git.behind ? "diverged" : p.git.behind ? "behind" : p.git.ahead ? "ahead" : "clean";
+    const filters = { all: () => true, changed: p => p.git.dirty, ahead: p => p.git.ahead > 0 || kind(p) === "publish", behind: p => p.git.behind > 0, noremote: p => !p.git.remoteName };
+    const rows = repositories.filter(filters[overviewFilter] || filters.all);
+    const tiles = [["all", "Repositories", repositories.length, "neutral"], ["changed", "Mit Änderungen", repositories.filter(filters.changed).length, "warn"], ["ahead", "Ungepusht", repositories.filter(filters.ahead).length, "info"], ["behind", "Hinterher", repositories.filter(filters.behind).length, "danger"], ["noremote", "Ohne Remote", repositories.filter(filters.noremote).length, "neutral"]];
+    const pushable = repositories.filter(p => p.git.remoteName && p.git.branch && p.git.lastCommit && (p.git.ahead || !p.git.upstream) && !p.git.behind);
+    const latestFetch = repositories.map(p => p.git.lastFetchAt).filter(Boolean).sort().pop();
+    const chip = p => ({ conflict: `<span class="gw-chip tone-danger">${icon("triangle-exclamation")} Konflikt</span>`, noremote: '<span class="gw-chip tone-neutral">kein Remote</span>', publish: '<span class="gw-chip tone-info">unveröffentlicht</span>', diverged: `<span class="gw-chip tone-danger">${icon("arrow-up")}${p.git.ahead} ${icon("arrow-down")}${p.git.behind}</span>`, behind: `<span class="gw-chip tone-warn">${icon("arrow-down")} ${p.git.behind}</span>`, ahead: `<span class="gw-chip tone-info">${icon("arrow-up")} ${p.git.ahead}</span>`, clean: '<span class="gw-chip tone-ok">synchron</span>' })[kind(p)];
+    const quick = p => {
+      const k = kind(p);
+      if (k === "conflict" || k === "diverged" || k === "noremote") return button(k === "noremote" ? "Remote …" : "Öffnen", "repository", `data-id="${p.id}"`);
+      if (p.git.dirty) return button(icon("code-commit") + " Committen", "repository", `data-id="${p.id}"`);
+      if (k === "ahead" || k === "publish") return button(icon("arrow-up") + (k === "publish" ? " Veröffentlichen" : " Push"), "ov-action", `data-id="${p.id}" data-action="push"`, false, "gw-primary");
+      if (k === "behind") return button(icon("arrow-down") + " Pull", "ov-action", `data-id="${p.id}" data-action="pull"`);
+      return button(icon("arrows-rotate") + " Fetch", "ov-action", `data-id="${p.id}" data-action="fetch"`, !p.git.remoteName, "gw-quiet");
+    };
+    const stale = p => p.git.lastCommit && Date.now() - new Date(p.git.lastCommit.date).getTime() > 30 * 86400000;
+    return `<header class="gw-header gw-header-overview"><div class="gw-seg gw-seg-static"><span class="gw-seg-icon">${icon("table-cells-large")}</span><span class="gw-seg-copy"><small>Arbeitsbereich</small><strong>Alle Repositories</strong><code>${plural(repositories.length, "Repository", "Repositories")}${latestFetch ? ` · zuletzt geholt ${ago(latestFetch)}` : ""}</code></span></div>
+      <div class="gw-header-tools gw-header-tools-wide">${button(icon(busy?.action === "fetch" ? "spinner fa-spin" : "arrows-rotate") + " Alle holen", "fetch-all", 'title="Fetch für jedes Repository mit Remote"', !repositories.some(p => p.git.remoteName))}${button(icon("arrow-up") + ` ${plural(pushable.length, "Repo", "Repos")} pushen`, "push-all", 'title="Alle Repositories mit lokalen Commits pushen"', !pushable.length, "gw-primary")}</div></header>
+      ${notice ? `<div class="gw-notice ${notice.error ? "error" : "success"}" role="${notice.error ? "alert" : "status"}">${icon(notice.error ? "circle-exclamation" : "circle-check")}<span>${notice.id ? `<b>${esc(state.projects.find(x => x.id === notice.id)?.name || "")}</b> · ` : ""}${esc(notice.message)}</span>${button(icon("xmark"), "dismiss-notice", 'aria-label="Meldung schließen"', false, "gw-icon-button")}</div>` : ""}
+      <div class="gw-view" data-gw-scroll="view"><section class="gw-overview">
+        <div class="gw-kpis">${tiles.map(([value, label, total, tone]) => button(`<small>${label}</small><strong>${total}</strong>`, "ov-filter", `data-value="${value}" aria-pressed="${overviewFilter === value}"`, false, `gw-kpi tone-${tone} ${overviewFilter === value ? "active" : ""}`)).join("")}</div>
+        <div class="gw-table" role="table" aria-label="Repositories"><div class="gw-table-head" role="row"><span>Repository</span><span>Branch</span><span>Änderungen</span><span>Sync</span><span>Letzter Commit</span><span></span></div>
+        ${rows.map(p => `<div class="gw-table-row ${stale(p) ? "stale" : ""}" role="row"><button type="button" class="gw-table-name" data-gw="repository" data-id="${p.id}"><strong>${esc(p.name)}</strong><code>${esc(p.relativePath)}</code></button><span class="gw-mono">${esc(p.git.branch || "detached")}</span><span>${p.git.dirty ? `<span class="gw-chip tone-warn">${plural(p.git.changedFiles, "Datei", "Dateien")}</span>` : '<span class="gw-muted">–</span>'}</span><span>${chip(p)}</span><span class="gw-table-commit">${p.git.lastCommit ? `<span title="${esc(p.git.lastCommit.subject)}">${esc(p.git.lastCommit.subject)}</span><small>${ago(p.git.lastCommit.date)}</small>` : '<span class="gw-muted">Noch kein Commit</span>'}</span><span class="gw-table-action">${quick(p)}</span></div>`).join("") || `<p class="gw-list-empty">Kein Repository passt zu diesem Filter.</p>`}</div>
+        ${state.projects.some(p => !p.git) ? `<p class="gw-overview-foot">${plural(state.projects.filter(p => !p.git).length, "Projekt", "Projekte")} ohne Git. ${button("Git anlegen oder klonen …", "add", "", false, "gw-link")}</p>` : ""}
+      </section></div>`;
+  }
+
   function render() {
     if (state.page !== "git") return;
     document.querySelector("#workspace-primary-action").disabled = Boolean(busy);
@@ -221,10 +463,16 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const scrolls = [...root.querySelectorAll("[data-gw-scroll]"), ...rail.querySelectorAll("[data-gw-scroll]")].map(el => [el.dataset.gwScroll, el.scrollTop, el.scrollLeft]);
     const railHtml = repositoryRail(repositories);
     if (rail.__gwHtml !== railHtml) { rail.__gwHtml = railHtml; rail.innerHTML = railHtml; }
-    const html = `<div class="gw-shell"><main class="gw-main" aria-label="Git-Repository">${p ? toolbar(p, w) + navigation(p, w) + operationBanner(p, w) + (notice?.id === p.id ? `<div class="gw-notice ${notice.error ? "error" : "success"}" role="${notice.error ? "alert" : "status"}">${icon(notice.error ? "circle-exclamation" : "circle-check")}<span>${esc(notice.message)}</span>${button(icon("xmark"), "dismiss-notice", 'aria-label="Meldung schließen"', false, "gw-icon-button")}</div>` : "") + `<div class="gw-view" data-gw-scroll="view">${s.tab === "changes" ? changeView(p) : s.tab === "history" ? historyView(p) : s.tab === "branches" ? branchView(p, w) : s.tab === "stashes" ? stashView(p, w) : s.tab === "tags" ? tagsView(p, w) : settingsView(p, w)}</div>` : empty("code-branch", "Dein Git-Arbeitsbereich", "Klone ein Repository oder aktiviere Git in einem vorhandenen Projekt.", button("Repository hinzufügen", "add", "", false, "gw-primary"))}<footer class="gw-statusbar"><span>${busy ? icon("spinner fa-spin") + " Git-Aktion läuft …" : icon("circle-check") + " Bereit"}</span>${p ? `<span>${esc(p.git.upstream || (p.git.remoteName ? "Noch kein Upstream" : "Lokales Repository"))}</span><span>${icon("arrow-up")} ${p.git.ahead} voraus <i class="gw-footer-divider"></i>${icon("arrow-down")} ${p.git.behind} zurück</span>` : ""}</footer></main></div>`;
+    const showOverview = view === "overview" && repositories.length > 0;
+    const body = !repositories.length ? empty("code-branch", "Dein Git-Arbeitsbereich", "Klone ein Repository oder aktiviere Git in einem vorhandenen Projekt.", button("Repository hinzufügen", "add", "", false, "gw-primary"))
+      : showOverview ? overviewView(repositories)
+      : header(p, w) + guide(p, w) + navigation(p, w) + (notice?.id === p.id ? `<div class="gw-notice ${notice.error ? "error" : "success"}" role="${notice.error ? "alert" : "status"}">${icon(notice.error ? "circle-exclamation" : "circle-check")}<span>${esc(notice.message)}</span>${button(icon("xmark"), "dismiss-notice", 'aria-label="Meldung schließen"', false, "gw-icon-button")}</div>` : "") + `<div class="gw-view" data-gw-scroll="view">${s.tab === "changes" ? changeView(p) : s.tab === "history" ? historyView(p) : s.tab === "branches" ? branchView(p, w) : s.tab === "stashes" ? stashView(p, w) : s.tab === "tags" ? tagsView(p, w) : settingsView(p, w)}</div>`;
+    const statusbar = `<footer class="gw-statusbar"><span>${busy ? icon("spinner fa-spin") + " Git-Aktion läuft …" : icon("circle-check") + " Bereit"}</span>${p && !showOverview ? `<span class="gw-mono">${esc(p.git.upstream || (p.git.remoteName ? "Noch kein Upstream" : "Lokales Repository"))}</span><span>${icon("arrow-up")} ${p.git.ahead} <i class="gw-footer-divider"></i>${icon("arrow-down")} ${p.git.behind}</span>${p.git.lastFetchAt ? `<span title="${esc(new Date(p.git.lastFetchAt).toLocaleString("de-DE"))}">Geholt ${ago(p.git.lastFetchAt)}</span>` : ""}` : ""}</footer>`;
+    const html = `<div class="gw-shell ${menu ? "menu-open" : ""}"><main class="gw-main" aria-label="Git-Repository">${body}${statusbar}</main></div>`;
     if (root.__gwHtml !== html) {
       root.__gwHtml = html;
       root.innerHTML = html;
+      root.querySelectorAll("[data-width]").forEach(el => { el.style.width = `${el.dataset.width}%`; });
       for (const [id, top, left] of scrolls) { const el = document.querySelector(`[data-gw-scroll="${id}"]`); if (el) { el.scrollTop = top; el.scrollLeft = left; } }
       if (focusKey) { const el = document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`); el?.focus({ preventScroll: true }); if (selection && el?.setSelectionRange) { try { el.setSelectionRange(...selection); } catch { /* search fields */ } } }
     }
@@ -241,7 +489,7 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
       if (result.project) { const i = state.projects.findIndex(p => p.id === result.project.id); if (i >= 0) state.projects[i] = result.project; }
       if (result.projects) state.projects = result.projects;
       if (["commit", "amend", "commit-files", "amend-files"].includes(action)) { Object.assign(session(id), { summary: "", description: "", amend: false, commit: null }); saveDraft(id); }
-      if (["checkout", "checkout-remote", "create-branch"].includes(action)) Object.assign(session(id), { commit: null, file: null, comparison: null, amend: false });
+      if (["checkout", "checkout-remote", "create-branch"].includes(action)) Object.assign(session(id), { commit: null, file: null, comparison: null, amend: false, branchQuery: "" });
       if (action === "init") { state.activeGitProjectId = id; }
       if (action === "clone") { const p = state.projects.find(p => p.relativePath === payload.name); if (p) state.activeGitProjectId = p.id; }
       notice = { id: id || state.activeGitProjectId, message: result.message, error: false };
@@ -262,6 +510,12 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     }
     return success;
   }
+  async function runEach(action, ids, label) {
+    let done = 0; let failed = 0;
+    for (const id of ids) { (await run(action, {}, id)) ? done += 1 : failed += 1; }
+    notice = { id: null, message: `${label}: ${plural(done, "Repository", "Repositories")} erledigt${failed ? `, ${failed} fehlgeschlagen` : ""}.`, error: failed > 0 };
+    render();
+  }
 
   const dialog = document.createElement("dialog");
   dialog.className = "gw-dialog";
@@ -274,7 +528,7 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     dialog.innerHTML = `<form><header><span class="gw-modal-glyph ${danger ? "danger" : ""}">${icon(danger ? "triangle-exclamation" : "code-branch")}</span><div><h2 id="gw-dialog-title">${esc(title)}</h2><p>${esc(description)}</p></div><button type="button" class="gw-button gw-icon-button" data-dialog-close aria-label="Dialog schließen">${icon("xmark")}</button></header><div class="gw-dialog-body">${body}<p class="gw-dialog-error" role="alert" hidden></p></div><footer><button type="button" class="gw-button" data-dialog-close>Abbrechen</button><button type="submit" class="gw-button ${danger ? "gw-danger" : "gw-primary"}">${esc(submit)}</button></footer></form>`;
     dialog.setAttribute("aria-labelledby", "gw-dialog-title");
     if (!dialog.open) dialog.showModal();
-    const input = dialog.querySelector("input"); if (input) input.focus();
+    const input = dialog.querySelector("input:not([type=radio]):not([type=checkbox])"); if (input) input.focus();
   }
   dialog.addEventListener("click", event => { if (event.target === dialog || event.target.closest("[data-dialog-close]")) { if (!busy) dialog.close(); } });
   dialog.addEventListener("cancel", event => { if (busy) event.preventDefault(); });
@@ -299,26 +553,43 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const options = state.projects.filter(p => !p.git);
     modal("Repository hinzufügen", "Klone ein Repository in den aktuellen Workspace.", field("Repository-URL", "url", "", 'placeholder="https://github.com/name/repository.git" required') + field("Neuer Ordnername", "name", "", 'placeholder="mein-projekt" required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*"') + (options.length ? `<div class="gw-dialog-divider">Oder Git in einem vorhandenen Projekt aktivieren</div><div class="gw-init-list">${options.map(p => button(esc(p.name) + " · Git anlegen", "init-dialog", `data-id="${p.id}"`)).join("")}</div>` : ""), "Repository klonen", payload => run("clone", payload));
   }
+  function openMenu(value) {
+    menu = menu === value ? null : value; menuQuery = "";
+    const p = selected(); if (p && menu === "branch") session(p.id).branchQuery = "";
+    render();
+    root.querySelector(".gw-popover input")?.focus();
+  }
   async function interact(target) {
     const action = target.dataset.gw;
     const p = selected();
     const s = p ? session(p.id) : null;
     const w = p ? data(p.id, "workspace") : null;
+    if (action === "menu") { openMenu(target.dataset.value); return; }
     if (action === "add") { addRepository(); return; }
     if (action === "init-dialog") {
       const project = state.projects.find(p => p.id === target.dataset.id);
       modal("Git-Repository anlegen", `Git im Projekt „${project.name}“ initialisieren. Dateien werden anschließend als neue Änderungen angezeigt.`, "", "Git anlegen", () => run("init", {}, project.id)); return;
     }
     if (action === "filter") { repoFilter = target.dataset.value; render(); return; }
-    if (action === "repository") { state.activeGitProjectId = target.dataset.id; localStorage.setItem("devhub_git_project", state.activeGitProjectId); render(); ensure(state.activeGitProjectId); return; }
+    if (action === "overview") { view = "overview"; localStorage.setItem("devhub_git_view", view); render(); return; }
+    if (action === "ov-filter") { overviewFilter = target.dataset.value; render(); return; }
+    if (action === "ov-action") { await run(target.dataset.action, {}, target.dataset.id); return; }
+    if (action === "fetch-all") { await runEach("fetch", state.projects.filter(x => x.git?.remoteName).map(x => x.id), "Fetch"); return; }
+    if (action === "push-all") {
+      const targets = state.projects.filter(x => x.git?.remoteName && x.git.branch && x.git.lastCommit && (x.git.ahead || !x.git.upstream) && !x.git.behind);
+      modal("Repositories pushen", `${plural(targets.length, "Repository wird", "Repositories werden")} nacheinander zum Remote übertragen.`, `<ul class="gw-dialog-list">${targets.map(x => `<li><strong>${esc(x.name)}</strong><small>${esc(x.git.branch)} · ${x.git.upstream ? plural(x.git.ahead, "Commit", "Commits") : "veröffentlichen"}</small></li>`).join("")}</ul>`, "Alle pushen", async () => { dialog.close(); await runEach("push", targets.map(x => x.id), "Push"); return true; }); return;
+    }
+    if (action === "repository") { state.activeGitProjectId = target.dataset.id; view = "repo"; localStorage.setItem("devhub_git_view", view); localStorage.setItem("devhub_git_project", state.activeGitProjectId); render(); ensure(state.activeGitProjectId); return; }
+    if (action === "dismiss-notice") { notice = null; render(); return; }
     if (!p) return;
-    if (action === "tab") { s.tab = target.dataset.value; render(); ensure(p.id); return; }
+    if (action === "dismiss-guide") { dismissedGuides.add(target.dataset.value); localStorage.setItem("devhub_git_guides", JSON.stringify([...dismissedGuides])); render(); return; }
+    if (action === "tab") { s.tab = target.dataset.value; if (s.tab !== "branches") s.branchQuery = ""; render(); ensure(p.id); return; }
+    if (action === "fold") { const dir = target.dataset.dir; s.collapsed.has(dir) ? s.collapsed.delete(dir) : s.collapsed.add(dir); render(); return; }
     if (action === "advanced-mode" || action === "simple-mode") { s.advanced = action === "advanced-mode"; s.scope = "working"; s.file = null; render(); ensure(p.id); return; }
     if (action === "toggle-include") { const path = target.dataset.path; s.excluded.has(path) ? s.excluded.delete(path) : s.excluded.add(path); render(); return; }
     if (action === "scope") { s.scope = target.dataset.value; s.file = null; render(); ensure(p.id); return; }
     if (action === "file") { s.file = target.dataset.path; render(); ensure(p.id); return; }
     if (action === "wrap") { s.wrap = !s.wrap; render(); return; }
-    if (action === "dismiss-notice") { notice = null; render(); return; }
     if (["editor", "terminal", "folder"].includes(action)) { projectAction(p.id, action); return; }
     if (action === "copy-file" || action === "copy-hash") { await navigator.clipboard.writeText(action === "copy-file" ? s.file : s.commit); toast("Kopiert."); return; }
     if (action === "commit-detail") { s.commit = target.dataset.hash; s.historyFile = ""; render(); ensure(p.id); return; }
@@ -328,7 +599,12 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
       if (section) await run(s.scope === "staged" ? "unstage-hunk" : "stage-hunk", { file: s.file, fingerprint: section.fingerprint, hunk: Number(target.dataset.index) }); return;
     }
     if (["refresh", "fetch", "pull", "push", "stage-all", "unstage-all", "continue"].includes(action)) { await run(action); return; }
+    if (action === "pull-method") { await run("pull", { method: target.dataset.value }); return; }
+    if (action === "pull-dialog") {
+      modal("Remote-Stand übernehmen", `„${p.git.branch}“ ist ${p.git.ahead} ${p.git.ahead === 1 ? "Commit" : "Commits"} voraus und ${p.git.behind} zurück. Wie sollen beide Stränge zusammenkommen?`, `<label class="gw-choice"><input type="radio" name="method" value="rebase" checked><span><strong>Rebase</strong><small>Deine ${plural(p.git.ahead, "Commit wird", "Commits werden")} auf den Remote-Stand gesetzt. Gerader Verlauf, kein Merge-Commit. Empfohlen, solange du die Commits noch nicht geteilt hast.</small></span></label><label class="gw-choice"><input type="radio" name="method" value="merge"><span><strong>Merge</strong><small>Beide Stränge bleiben erhalten und werden mit einem Merge-Commit verbunden.</small></span></label>${p.git.dirty ? '<p class="gw-warning">Du hast offene Änderungen. Committe oder sichere sie zuerst im Stash, sonst lehnt Git den Vorgang ab.</p>' : ""}`, "Pull ausführen", form => run("pull", { method: form.method }, p.id)); return;
+    }
     if (["checkout", "checkout-remote"].includes(action)) { await run(action, { branch: target.dataset.branch }); return; }
+    if (action === "create-branch-now") { await run("create-branch", { branch: target.dataset.branch }); return; }
     if (action === "suggest") {
       const original = s.summary; target.disabled = true;
       try { const result = await api(base(p.id) + (s.advanced ? "commit-message" : "suggest-files"), s.advanced ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files: includedFiles(p).map(f => f.path) }) }); if (s.summary === original) { s.summary = result.message; saveDraft(p.id); render(); } } finally { target.disabled = false; } return;
@@ -344,16 +620,21 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
       const support = trash?.available !== false;
       confirm("Änderungen verwerfen?", "Die Datei wird auf den letzten Commit zurückgesetzt. Auch ihre Vormerkung wird entfernt.", "discard-files", { files: [path] }, "Änderungen verwerfen", true, `<code class="gw-confirm-target">${esc(path)}</code><p class="gw-warning">Änderungen an versionierten Dateien gehen verloren. Neue Dateien werden ${support ? "in den Papierkorb verschoben" : "endgültig gelöscht"}.</p>`); return;
     }
-    if (action === "create-branch-dialog") { confirm("Neuer Branch", `Erstellt einen Branch vom aktuellen Stand (${p.git.branch || "HEAD"}) und wechselt zu ihm.`, "create-branch", {}, "Branch erstellen", false, field("Branch-Name", "branch", "", 'required placeholder="feature/meine-aenderung" maxlength="100"')); return; }
+    if (action === "resolve-dialog") {
+      const path = target.dataset.path; const side = target.dataset.side; const rebase = w?.operation === "rebase";
+      const label = side === "ours" ? (rebase ? "Stand des Ziel-Branch behalten" : `Meine Version (${p.git.branch || "HEAD"}) behalten`) : (rebase ? "Meinen Commit übernehmen" : "Eingehende Version übernehmen");
+      confirm(label + "?", "Die Datei wird komplett auf diese Version gesetzt und als gelöst vorgemerkt. Die andere Seite dieser Datei geht für diesen Vorgang verloren.", "resolve-file", { file: path, side }, label, false, `<code class="gw-confirm-target">${esc(path)}</code><p class="gw-warning">Brauchst du Teile aus beiden Versionen, löse den Konflikt stattdessen im Editor.</p>`); return;
+    }
+    if (action === "create-branch-dialog") { confirm("Neuer Branch", `Erstellt einen Branch vom aktuellen Stand (${p.git.branch || "HEAD"}) und wechselt zu ihm.`, "create-branch", {}, "Branch erstellen", false, field("Branch-Name", "branch", s.branchQuery.trim(), 'required placeholder="feature/meine-aenderung" maxlength="100"')); return; }
     if (action === "rename-branch-dialog") { confirm("Branch umbenennen", `Lokalen Branch „${target.dataset.branch}“ umbenennen.`, "rename-branch", { branch: target.dataset.branch }, "Umbenennen", false, field("Neuer Name", "name", target.dataset.branch, 'required maxlength="100"')); return; }
     if (action === "delete-branch-dialog") { confirm("Branch löschen?", `„${target.dataset.branch}“ lokal löschen. Git schützt Branches mit noch nicht integrierten Commits.`, "delete-branch", { branch: target.dataset.branch }, "Branch löschen", true); return; }
     if (action === "integrate-dialog") {
       const branch = target.dataset.branch;
       modal("Branch integrieren", `Änderungen aus „${branch}“ in „${p.git.branch}“ übernehmen.`, `<label class="gw-choice"><input type="radio" name="method" value="merge" checked><span><strong>Merge</strong><small>Verläufe zusammenführen. Bestehende Commits bleiben erhalten.</small></span></label><label class="gw-choice"><input type="radio" name="method" value="rebase"><span><strong>Rebase</strong><small>Eigene Commits auf den Quellbranch setzen. Nur für unveröffentlichte Arbeit verwenden.</small></span></label>`, "Integrieren", form => run(form.method, { branch }, p.id)); return;
     }
-    if (action === "compare") { s.comparison = target.dataset.branch; await read(p.id, `compare:${s.comparison}`, `compare?branch=${encodeURIComponent(s.comparison)}`, true); render(); return; }
+    if (action === "compare") { s.comparison = target.dataset.branch; s.tab = "branches"; render(); await read(p.id, `compare:${s.comparison}`, `compare?branch=${encodeURIComponent(s.comparison)}`, true); render(); return; }
     if (action === "close-comparison") { s.comparison = null; render(); return; }
-    if (action === "confirm-abort") { confirm("Vorgang abbrechen?", `Den laufenden ${w?.operation || "Git-Vorgang"} abbrechen. Bisherige Konfliktauflösungen werden zurückgesetzt.`, "abort", {}, "Vorgang abbrechen", true); return; }
+    if (action === "confirm-abort") { confirm("Vorgang abbrechen?", `Den laufenden ${operationName(w?.operation)} abbrechen. Der Stand von vor dem Vorgang wird wiederhergestellt, bisherige Konfliktauflösungen gehen verloren.`, "abort", {}, "Vorgang abbrechen", true); return; }
     if (action === "stash-save-dialog") { confirm("Änderungen zwischenspeichern", "Sichert versionierte Änderungen und neue Dateien. Ignorierte Dateien bleiben unberührt.", "stash-save", {}, "Im Stash sichern", false, field("Beschreibung", "message", "", 'placeholder="Woran arbeitest du gerade?" maxlength="200"')); return; }
     if (action.startsWith("stash-")) {
       const stash = w?.stashes?.find(stash => stash.hash === target.dataset.hash); if (!stash) return;
@@ -380,22 +661,26 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
       finally { pendingReads.delete(key(p.id, "history-more")); render(); } return;
     }
   }
-  for (const surface of [root, rail]) surface.addEventListener("click", event => { const target = event.target.closest("[data-gw]"); if (target && !target.disabled) { event.stopPropagation(); interact(target).catch(error => toast(error.message, "error")); } });
+  for (const surface of [root, rail]) surface.addEventListener("click", event => {
+    const target = event.target.closest("[data-gw]");
+    if (target && !target.disabled) {
+      event.stopPropagation();
+      if (target.dataset.gw !== "menu" && menu) menu = null;
+      interact(target).catch(error => toast(error.message, "error"));
+    } else if (menu && !event.target.closest(".gw-popover")) { menu = null; render(); }
+  });
+  document.addEventListener("click", event => { if (menu && !root.contains(event.target) && !dialog.contains(event.target)) { menu = null; render(); } });
   dialog.addEventListener("click", event => { const target = event.target.closest("[data-gw]"); if (target && !target.disabled) interact(target).catch(error => toast(error.message, "error")); });
   for (const surface of [root, rail]) surface.addEventListener("input", event => {
     const kind = event.target.dataset.gwInput;
     const p = selected(); if (!kind) return;
     if (kind === "repoQuery") { state.gitQuery = event.target.value; render(); return; }
+    if (kind === "menuQuery") { menuQuery = event.target.value; render(); return; }
     if (!p) return;
     const s = session(p.id);
     if (kind === "includeFile") { event.target.checked ? s.excluded.delete(event.target.dataset.path) : s.excluded.add(event.target.dataset.path); render(); return; }
     if (kind === "selectAll") { s.excluded = new Set(event.target.checked ? [] : p.git.files.map(f => f.path)); render(); return; }
-    if (["summary", "description"].includes(kind)) {
-      s[kind] = event.target.value; saveDraft(p.id);
-      const commit = root.querySelector(".gw-commit-submit");
-      if (commit) commit.disabled = !!busy || s.summary.trim().length < 3 || (s.advanced ? (!p.git.staged && !s.amend) : !includedFiles(p).length) || !!count(p, conflict) || !!data(p.id, "workspace")?.operation;
-      return;
-    }
+    if (["summary", "description"].includes(kind)) { s[kind] = event.target.value; saveDraft(p.id); refreshComposer(p); return; }
     if (["amend", "historyAll"].includes(kind)) {
       s[kind] = event.target.checked;
       if (kind === "amend" && s.amend && !s.summary) { s.summary = p.git.lastCommit?.subject || ""; saveDraft(p.id); }
@@ -414,8 +699,12 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     else if (form.dataset.gwForm === "identity") run("identity", Object.fromEntries(new FormData(form)));
   });
   root.addEventListener("keydown", event => {
+    if (event.key === "Escape" && menu) { event.preventDefault(); menu = null; render(); root.querySelector('[data-gw="menu"][data-value="branch"]')?.focus(); return; }
+    if (event.key === "Enter" && event.target.dataset?.gwInput === "branchQuery" && menu === "branch") { event.preventDefault(); const first = root.querySelector(".gw-popover-branch .gw-menu-main:not(:disabled)"); if (first) { menu = null; interact(first).catch(error => toast(error.message, "error")); } return; }
+    if (event.key === "Enter" && event.target.dataset?.gwInput === "menuQuery" && menu === "repo") { event.preventDefault(); const first = root.querySelector(".gw-popover-repo .gw-menu-row:not(.current)") || root.querySelector(".gw-popover-repo .gw-menu-row"); if (first) { menu = null; interact(first).catch(error => toast(error.message, "error")); } return; }
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && event.target.closest(".gw-composer")) { event.preventDefault(); root.querySelector(".gw-commit-submit")?.click(); }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") { event.preventDefault(); if (!busy) run("refresh"); }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b" && selected() && view === "repo") { event.preventDefault(); openMenu("branch"); }
     const file = event.target.closest('.gw-file > button[data-gw="file"]');
     if (file && ["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); const files = [...root.querySelectorAll('.gw-file > button[data-gw="file"]')]; const next = files[files.indexOf(file) + (event.key === "ArrowDown" ? 1 : -1)]; if (next) { const path = next.dataset.path; interact(next).then(() => root.querySelector(`.gw-file > button[data-path="${CSS.escape(path)}"]`)?.focus()); } }
   });

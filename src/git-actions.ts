@@ -9,7 +9,7 @@ import type { ProjectDefinition } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export const advancedGitActions = ["suggest-files", "commit-files", "amend-files", "ignore", "amend", "rename-branch", "delete-branch", "checkout-remote", "merge", "rebase", "continue", "abort", "stash-save", "stash-apply", "stash-pop", "stash-drop", "create-tag", "delete-tag", "push-tag", "remote-add", "remote-remove", "remote-set-url", "identity", "revert", "cherry-pick", "stage-hunk", "unstage-hunk"] as const;
+export const advancedGitActions = ["suggest-files", "commit-files", "amend-files", "ignore", "amend", "rename-branch", "delete-branch", "checkout-remote", "merge", "rebase", "continue", "abort", "stash-save", "stash-apply", "stash-pop", "stash-drop", "create-tag", "delete-tag", "push-tag", "remote-add", "remote-remove", "remote-set-url", "identity", "revert", "cherry-pick", "stage-hunk", "unstage-hunk", "resolve-file"] as const;
 export type GitAction = typeof advancedGitActions[number] | "refresh" | "stage" | "unstage" | "stage-files" | "unstage-files" | "discard-files" | "stage-all" | "unstage-all" | "commit" | "fetch" | "pull" | "push" | "checkout" | "create-branch" | "undo-commit";
 
 export interface GitActionPayload {
@@ -28,6 +28,8 @@ export interface GitActionPayload {
   fingerprint?: unknown;
   folder?: unknown;
   untrack?: unknown;
+  method?: unknown;
+  side?: unknown;
 }
 
 export interface GitBranchInfo {
@@ -393,8 +395,11 @@ export async function runGitAction(project: ProjectDefinition, action: GitAction
   if (action === "pull") {
     if (!info.branch) throw new Error("Ein Pull ist im detached-HEAD-Zustand nicht verfügbar.");
     if (!info.upstream) throw new Error("Für diesen Branch ist noch kein Upstream eingerichtet.");
-    await git(repository, ["pull", "--ff-only"], 60_000);
-    return "Remote-Commits wurden übernommen.";
+    // Fast-forward bleibt der sichere Standard. Bei auseinandergelaufenen Branches wählt die Oberfläche Merge oder Rebase explizit.
+    const method = payload.method === "merge" ? "merge" : payload.method === "rebase" ? "rebase" : "ff-only";
+    if (method !== "ff-only" && info.dirty) throw new Error("Committe oder sichere deine Änderungen, bevor du Merge oder Rebase startest.");
+    await git(repository, ["pull", method === "ff-only" ? "--ff-only" : method === "merge" ? "--no-rebase" : "--rebase", ...(method === "merge" ? ["--no-edit"] : [])], 60_000);
+    return method === "ff-only" ? "Remote-Commits wurden übernommen." : method === "merge" ? "Remote-Commits per Merge übernommen." : "Eigene Commits per Rebase auf den Remote-Stand gesetzt.";
   }
   if (action === "checkout") {
     const branch = requestedBranchName(payload.branch);
@@ -500,6 +505,36 @@ async function knownStash(project: ProjectDefinition, payload: GitActionPayload)
   const actual = await git(repositoryPath(project), ["rev-parse", "--verify", ref]);
   if (actual !== payload.hash) throw new Error("Die Stash-Liste hat sich geändert. Bitte aktualisieren und erneut auswählen.");
   return ref;
+}
+
+// Zeilenzahlen pro Datei für die Dateiliste. Versionierte Dateien über numstat, neue Dateien über die Dateigröße.
+export async function readGitStats(project: ProjectDefinition): Promise<Record<string, { additions: number; deletions: number; binary: boolean }>> {
+  const repository = repositoryPath(project);
+  const info = project.git!;
+  const stats: Record<string, { additions: number; deletions: number; binary: boolean }> = {};
+  if (info.lastCommit) {
+    const output = await gitDiff(repository, ["diff", "--numstat", "-z", "--no-ext-diff", "HEAD", "--"]);
+    const tokens = output.split("\0");
+    for (let index = 0; index < tokens.length; index += 1) {
+      const match = tokens[index].match(/^(\d+|-)\t(\d+|-)\t(.*)$/s);
+      if (!match) continue;
+      let file = match[3];
+      if (!file) { file = tokens[index + 2] || ""; index += 2; }
+      if (file) stats[file] = { additions: match[1] === "-" ? 0 : Number(match[1]), deletions: match[2] === "-" ? 0 : Number(match[2]), binary: match[1] === "-" };
+    }
+  }
+  const untracked = info.files.filter(file => file.worktreeStatus === "?" && !stats[file.path]).slice(0, 200);
+  await Promise.all(untracked.map(async file => {
+    try {
+      const details = await lstat(path.join(repository, file.path));
+      if (!details.isFile() || details.size > 2_000_000) { stats[file.path] = { additions: 0, deletions: 0, binary: details.size > 2_000_000 }; return; }
+      const content = await readFile(path.join(repository, file.path));
+      const binary = content.subarray(0, 8000).includes(0);
+      const lines = binary ? 0 : content.length === 0 ? 0 : content.toString("utf8").split("\n").length - (content[content.length - 1] === 10 ? 1 : 0);
+      stats[file.path] = { additions: lines, deletions: 0, binary };
+    } catch { /* Datei zwischenzeitlich entfernt */ }
+  }));
+  return stats;
 }
 
 export async function readGitStash(project: ProjectDefinition, payload: GitActionPayload): Promise<{ patch: string; truncated: boolean }> {
@@ -626,6 +661,15 @@ async function runAdvancedGitAction(project: ProjectDefinition, action: GitActio
     }
     await git(repository, [action, ...(action === "merge" ? ["--no-edit"] : []), target], 60_000);
     return action === "merge" ? "Branches zusammengeführt." : "Rebase abgeschlossen.";
+  }
+  if (action === "resolve-file") {
+    const file = knownFile(project, payload.file);
+    const side = payload.side === "ours" ? "ours" : payload.side === "theirs" ? "theirs" : null;
+    if (!side) throw new Error("Wähle, welche Version übernommen werden soll.");
+    if (!await git(repository, ["ls-files", "--unmerged", "--", file])) throw new Error("Diese Datei hat keinen offenen Konflikt.");
+    await git(repository, ["checkout", `--${side}`, "--", file]);
+    await git(repository, ["add", "--", file]);
+    return `Konflikt in „${file}“ aufgelöst.`;
   }
   if (action === "continue" || action === "abort") {
     const operation = await operationInProgress(repository);

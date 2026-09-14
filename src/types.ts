@@ -48,6 +48,7 @@ export interface GitInfo {
   remoteName: string | null;
   remoteUrl: string | null;
   upstream: string | null;
+  lastFetchAt: string | null;
   repositoryRoot: string;
   files: Array<{
     path: string;

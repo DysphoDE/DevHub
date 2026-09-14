@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, getAppDirectory, saveScanRoot } from "./config.js";
-import { advancedGitActions, readGitWorkspace, readGitStash, readGitComparison, initializeGitRepository, cloneGitRepository, readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
+import { advancedGitActions, readGitWorkspace, readGitStash, readGitStats, readGitComparison, initializeGitRepository, cloneGitRepository, readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
 import { ProcessManager } from "./process-manager.js";
 import { readGitInfo, scanWorkspace } from "./scanner.js";
 import { isStackAction } from "./stack.js";
@@ -416,11 +416,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const gitWorkspaceMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(workspace|stash-diff|compare)$/);
+    const gitWorkspaceMatch = pathname.match(/^\/api\/projects\/([a-f0-9]+)\/git\/(workspace|stash-diff|compare|stats)$/);
     if (request.method === "GET" && gitWorkspaceMatch) {
       const project = projects.find(candidate => candidate.id === gitWorkspaceMatch[1]);
       if (!project?.git) throw new Error("Git-Repository nicht gefunden.");
       const data = gitWorkspaceMatch[2] === "workspace" ? await readGitWorkspace(project)
+        : gitWorkspaceMatch[2] === "stats" ? await readGitStats(project)
         : gitWorkspaceMatch[2] === "compare" ? await readGitComparison(project, url.searchParams.get("branch"))
         : await readGitStash(project, { stash: url.searchParams.get("stash"), hash: url.searchParams.get("hash") });
       sendJson(response, 200, data);

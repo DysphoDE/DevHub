@@ -194,9 +194,19 @@ function parseReadme(contents: string): MetadataCandidate {
   return { name: heading ? truncate(heading, 80) : undefined, description: paragraphs[0] ? truncate(paragraphs[0]) : undefined };
 }
 
+// HTML-Titel enthalten Entities wie &amp;; der Projektname soll den Klartext tragen.
+function decodeHtmlEntities(value: string | undefined): string | undefined {
+  if (!value) return value;
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity[0] === "#") { const code = entity[1].toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10); return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : match; }
+    return named[entity.toLowerCase()] ?? match;
+  });
+}
+
 function parseHtml(contents: string): MetadataCandidate {
-  const title = contents.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-    ?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const title = decodeHtmlEntities(contents.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+    ?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
   const description = contents.match(/<meta\s+[^>]*name=["']description["'][^>]*content=["']([^"']+)["'][^>]*>/i)?.[1]
     ?? contents.match(/<meta\s+[^>]*content=["']([^"']+)["'][^>]*name=["']description["'][^>]*>/i)?.[1];
   return {
@@ -506,11 +516,15 @@ export async function readGitInfo(repositoryPath: string | null, projectPath: st
   if (!repositoryPath) return null;
   try {
     const options = { timeout: 5000, windowsHide: true, maxBuffer: 2_000_000 };
-    const [statusResult, logResult, remoteResult] = await Promise.all([
+    const [statusResult, logResult, remoteResult, fetchHeadResult] = await Promise.all([
       execFileAsync("git", ["-C", repositoryPath, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"], options),
       execFileAsync("git", ["-C", repositoryPath, "log", "-1", "--format=%h%x1f%s%x1f%an%x1f%aI"], options).catch(() => ({ stdout: "", stderr: "" })),
-      execFileAsync("git", ["-C", repositoryPath, "remote", "get-url", "origin"], options).catch(() => ({ stdout: "", stderr: "" }))
+      execFileAsync("git", ["-C", repositoryPath, "remote", "get-url", "origin"], options).catch(() => ({ stdout: "", stderr: "" })),
+      execFileAsync("git", ["-C", repositoryPath, "rev-parse", "--git-path", "FETCH_HEAD"], options).catch(() => ({ stdout: "", stderr: "" }))
     ]);
+    // Der letzte Fetch-Zeitpunkt sagt der Oberfläche, wie frisch "voraus/zurück" ist.
+    const fetchHeadPath = fetchHeadResult.stdout.trim();
+    const lastFetchAt = fetchHeadPath ? await stat(path.resolve(repositoryPath, fetchHeadPath)).then(info => info.mtime.toISOString(), () => null) : null;
     const records = statusResult.stdout.split("\0").filter(Boolean);
     const branch = records.find((line) => line.startsWith("# branch.head "))?.slice(14).trim() || null;
     const upstream = records.find((line) => line.startsWith("# branch.upstream "))?.slice(18).trim() || null;
@@ -556,6 +570,7 @@ export async function readGitInfo(repositoryPath: string | null, projectPath: st
       remoteName,
       remoteUrl: gitRemoteWebUrl(remoteUrl),
       upstream,
+      lastFetchAt,
       repositoryRoot: toPosix(path.relative(projectPath, repositoryPath)) || ".",
       files: files.slice(0, 500),
       filesTruncated: files.length > 500,
@@ -566,7 +581,7 @@ export async function readGitInfo(repositoryPath: string | null, projectPath: st
     return head ? {
       branch: head.match(/^ref:\s+refs\/heads\/(.+)$/)?.[1]?.trim() ?? null,
       dirty: false, ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, changedFiles: 0,
-      remoteName: null, remoteUrl: null, upstream: null, repositoryRoot: toPosix(path.relative(projectPath, repositoryPath)) || ".",
+      remoteName: null, remoteUrl: null, upstream: null, lastFetchAt: null, repositoryRoot: toPosix(path.relative(projectPath, repositoryPath)) || ".",
       files: [], filesTruncated: false, lastCommit: null
     } : null;
   }
