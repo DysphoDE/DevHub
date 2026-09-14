@@ -16,6 +16,9 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
   let view = localStorage.getItem("devhub_git_view") === "overview" ? "overview" : "repo";
   let overviewFilter = "all";
   let dismissedGuides = new Set();
+  let github = null;
+  let githubLoading = false;
+  let githubQuery = "";
   try { dismissedGuides = new Set(JSON.parse(localStorage.getItem("devhub_git_guides") || "[]")); } catch { /* ignore */ }
   const icon = name => `<i class="fa-solid fa-${name}" aria-hidden="true"></i>`;
   const selected = () => state.projects.find(p => p.id === state.activeGitProjectId);
@@ -481,17 +484,17 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
   }
 
   async function run(action, payload = {}, id = selected()?.id) {
-    if (busy || (!id && action !== "clone")) return false;
+    if (busy || (!id && !["clone", "github-clone"].includes(action))) return false;
     busy = { id, action }; notice = null; render();
     let success = false;
     try {
-      const result = await api(action === "clone" ? "/api/git/clone" : base(id) + action, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const result = await api(action === "clone" ? "/api/git/clone" : action === "github-clone" ? "/api/git/github/clone" : base(id) + action, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (result.project) { const i = state.projects.findIndex(p => p.id === result.project.id); if (i >= 0) state.projects[i] = result.project; }
       if (result.projects) state.projects = result.projects;
       if (["commit", "amend", "commit-files", "amend-files"].includes(action)) { Object.assign(session(id), { summary: "", description: "", amend: false, commit: null }); saveDraft(id); }
       if (["checkout", "checkout-remote", "create-branch"].includes(action)) Object.assign(session(id), { commit: null, file: null, comparison: null, amend: false, branchQuery: "" });
       if (action === "init") { state.activeGitProjectId = id; }
-      if (action === "clone") { const p = state.projects.find(p => p.relativePath === payload.name); if (p) state.activeGitProjectId = p.id; }
+      if (action === "clone" || action === "github-clone") { const p = state.projects.find(p => p.relativePath === payload.name); if (p) { state.activeGitProjectId = p.id; view = "repo"; localStorage.setItem("devhub_git_project", p.id); } }
       notice = { id: id || state.activeGitProjectId, message: result.message, error: false };
       success = true;
     } catch (error) {
@@ -549,10 +552,36 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const id = selected()?.id;
     modal(title, description, extra, label, form => run(action, { ...payload, ...form }, id), danger);
   };
+  // The GitHub list comes from the locally signed-in GitHub CLI; cloning runs through gh so private repositories work without extra setup.
+  const inWorkspace = repo => state.projects.find(p => p.git?.remoteUrl && p.git.remoteUrl.replace(/\.git$/, "").toLowerCase().endsWith(`github.com/${repo.nameWithOwner.toLowerCase()}`));
+  function githubList() {
+    if (githubLoading && !github) return `<p class="gw-github-note">${icon("spinner fa-spin")} GitHub-Repositories werden geladen …</p>`;
+    if (!github) return "";
+    if (!github.available) return `<p class="gw-github-note">${icon("circle-info")} ${esc(github.hint || "GitHub ist nicht verfügbar.")}</p>`;
+    const q = githubQuery.trim().toLocaleLowerCase();
+    const rows = github.repositories.filter(r => `${r.nameWithOwner} ${r.description}`.toLocaleLowerCase().includes(q));
+    if (!rows.length) return `<p class="gw-github-note">${github.repositories.length ? "Kein Repository passt zur Suche." : "Dieses Konto hat noch keine Repositories."}</p>`;
+    return rows.slice(0, 60).map(r => { const existing = inWorkspace(r); return `<button type="button" class="gw-menu-row gw-menu-main ${existing ? "current" : ""}" data-gw="github-clone" data-repo="${esc(r.nameWithOwner)}" data-name="${esc(r.name)}" ${existing ? 'title="Liegt bereits im Workspace"' : ""}>${icon(r.isPrivate ? "lock" : "book")}<span><strong>${esc(r.nameWithOwner)}</strong><small>${r.description ? esc(r.description) + " · " : ""}${r.isFork ? "Fork · " : ""}${r.pushedAt ? `Push ${ago(r.pushedAt)}` : ""}</small></span>${existing ? `<span class="gw-chip tone-ok">im Workspace</span>` : `<small>${esc(r.defaultBranch || "")}</small>`}</button>`; }).join("") + (rows.length > 60 ? `<p class="gw-github-note">${rows.length - 60} weitere. Suche eingrenzen.</p>` : "");
+  }
+  function refreshGithubList() {
+    const list = dialog.querySelector(".gw-github-list"); if (list) list.innerHTML = githubList();
+    const account = dialog.querySelector(".gw-github-account"); if (account) account.textContent = github?.available ? `als ${github.account}` : githubLoading ? "lädt …" : "";
+  }
+  async function loadGithub(force = false) {
+    if (githubLoading || (github && !force)) return;
+    githubLoading = true; if (force) github = null; refreshGithubList();
+    try { github = await api("/api/git/github/repositories"); }
+    catch (error) { github = { available: false, account: null, repositories: [], hint: error.message }; }
+    finally { githubLoading = false; refreshGithubList(); }
+  }
   function addRepository() {
     const options = state.projects.filter(p => !p.git);
-    modal("Repository hinzufügen", "Klone ein Repository in den aktuellen Workspace.", field("Repository-URL", "url", "", 'placeholder="https://github.com/name/repository.git" required') + field("Neuer Ordnername", "name", "", 'placeholder="mein-projekt" required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*"') + (options.length ? `<div class="gw-dialog-divider">Oder Git in einem vorhandenen Projekt aktivieren</div><div class="gw-init-list">${options.map(p => button(esc(p.name) + " · Git anlegen", "init-dialog", `data-id="${p.id}"`)).join("")}</div>` : ""), "Repository klonen", payload => run("clone", payload));
+    modal("Repository hinzufügen", "Aus deinem GitHub-Konto, per URL oder als neues Git in einem vorhandenen Projekt.", `<section class="gw-github"><header>${icon("cloud-arrow-down")}<strong>Von GitHub klonen</strong><small class="gw-github-account"></small>${button(icon("rotate"), "github-refresh", 'aria-label="GitHub-Liste neu laden" title="Liste neu laden"', false, "gw-icon-button")}</header><label class="gw-search">${icon("magnifying-glass")}<input type="search" data-gh-search aria-label="GitHub-Repositories durchsuchen" placeholder="GitHub-Repository suchen …" value="${esc(githubQuery)}"></label><div class="gw-github-list">${githubList()}</div></section>
+      <div class="gw-dialog-divider">Oder per URL klonen</div>` + field("Repository-URL", "url", "", 'placeholder="https://github.com/name/repository.git" required') + field("Neuer Ordnername", "name", "", 'placeholder="mein-projekt" required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*"') + (options.length ? `<div class="gw-dialog-divider">Oder Git in einem vorhandenen Projekt aktivieren</div><div class="gw-init-list">${options.map(p => button(esc(p.name) + " · Git anlegen", "init-dialog", `data-id="${p.id}"`)).join("")}</div>` : ""), "Per URL klonen", payload => run("clone", payload));
+    dialog.querySelector("[data-gh-search]")?.focus();
+    loadGithub();
   }
+  dialog.addEventListener("input", event => { if (event.target.matches("[data-gh-search]")) { githubQuery = event.target.value; refreshGithubList(); } });
   function openMenu(value) {
     menu = menu === value ? null : value; menuQuery = "";
     const p = selected(); if (p && menu === "branch") session(p.id).branchQuery = "";
@@ -566,6 +595,12 @@ export function createGitWorkspace({ root, state, api, renderApp, renderPatch, e
     const w = p ? data(p.id, "workspace") : null;
     if (action === "menu") { openMenu(target.dataset.value); return; }
     if (action === "add") { addRepository(); return; }
+    if (action === "github-refresh") { loadGithub(true); return; }
+    if (action === "github-clone") {
+      const repo = target.dataset.repo; const existing = github?.repositories?.find(r => r.nameWithOwner === repo);
+      if (existing && inWorkspace(existing)) { toast("Dieses Repository liegt schon im Workspace."); return; }
+      modal("Von GitHub klonen", `${repo} wird mit der Anmeldung der GitHub CLI in den Workspace geklont.`, field("Ordnername im Workspace", "name", target.dataset.name, 'required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*" maxlength="100"') + `<code class="gw-confirm-target">${esc(existing?.url || `https://github.com/${repo}`)}</code>`, "Klonen", form => run("github-clone", { repo, name: form.name })); return;
+    }
     if (action === "init-dialog") {
       const project = state.projects.find(p => p.id === target.dataset.id);
       modal("Git-Repository anlegen", `Git im Projekt „${project.name}“ initialisieren. Dateien werden anschließend als neue Änderungen angezeigt.`, "", "Git anlegen", () => run("init", {}, project.id)); return;

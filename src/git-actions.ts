@@ -30,6 +30,7 @@ export interface GitActionPayload {
   untrack?: unknown;
   method?: unknown;
   side?: unknown;
+  repo?: unknown;
 }
 
 export interface GitBranchInfo {
@@ -738,10 +739,76 @@ export async function initializeGitRepository(project: ProjectDefinition): Promi
   await git(project.absolutePath, ["init", "-b", "main"]);
 }
 
-export async function cloneGitRepository(root: string, payload: GitActionPayload): Promise<void> {
-  const name = textValue(payload.name, 100);
+async function cloneDestination(root: string, value: unknown): Promise<string> {
+  const name = textValue(value, 100);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name) || name === "." || name === "..") throw new Error("Wähle einen einfachen Ordnernamen ohne Pfadangaben.");
   const destination = path.join(root, name);
   if (await access(destination).then(() => true, () => false)) throw new Error("Ein Ordner mit diesem Namen existiert bereits.");
+  return destination;
+}
+
+export async function cloneGitRepository(root: string, payload: GitActionPayload): Promise<void> {
+  const destination = await cloneDestination(root, payload.name);
   await git(root, ["clone", "--", remoteUrl(payload.url), destination], 120_000);
+}
+
+// GitHub CLI: Repositories des angemeldeten Kontos auflisten und mit dessen Anmeldung klonen.
+export interface GitHubRepository { name: string; nameWithOwner: string; description: string; url: string; isPrivate: boolean; isFork: boolean; pushedAt: string | null; defaultBranch: string | null; }
+export interface GitHubOverview { available: boolean; account: string | null; repositories: GitHubRepository[]; hint: string | null; }
+
+async function gh(args: string[], timeout = 30_000): Promise<string> {
+  const { stdout } = await execFileAsync("gh", args, { timeout, windowsHide: true, maxBuffer: 20_000_000, env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GIT_TERMINAL_PROMPT: "0" } });
+  return stdout;
+}
+
+export async function listGitHubRepositories(): Promise<GitHubOverview> {
+  let account: string;
+  try {
+    account = (await gh(["api", "user", "--jq", ".login"])).trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { available: false, account: null, repositories: [], hint: code === "ENOENT" ? "Die GitHub CLI (gh) ist nicht installiert. Installiere sie mit „brew install gh“ und melde dich mit „gh auth login“ an." : "Nicht bei GitHub angemeldet. Führe im Terminal „gh auth login“ aus und lade die Liste danach neu." };
+  }
+  const fields = "name,nameWithOwner,description,url,isPrivate,isFork,pushedAt,defaultBranchRef";
+  const organisations = (await gh(["api", "user/orgs", "--jq", ".[].login"]).catch(() => "")).split(/\r?\n/).map(line => line.trim()).filter(line => /^[\w.-]+$/.test(line)).slice(0, 10);
+  const outputs = await Promise.all([
+    gh(["repo", "list", "--limit", "200", "--json", fields], 60_000),
+    ...organisations.map(org => gh(["repo", "list", org, "--limit", "100", "--json", fields], 60_000).catch(() => "[]"))
+  ]);
+  const seen = new Set<string>();
+  const repositories: GitHubRepository[] = [];
+  for (const output of outputs) {
+    let parsed: unknown = [];
+    try { parsed = JSON.parse(output || "[]"); } catch { parsed = []; }
+    if (!Array.isArray(parsed)) continue;
+    for (const entry of parsed as Array<Record<string, unknown>>) {
+      const nameWithOwner = typeof entry.nameWithOwner === "string" ? entry.nameWithOwner : "";
+      if (!nameWithOwner || seen.has(nameWithOwner)) continue;
+      seen.add(nameWithOwner);
+      const defaultBranch = entry.defaultBranchRef && typeof entry.defaultBranchRef === "object" ? (entry.defaultBranchRef as { name?: unknown }).name : null;
+      repositories.push({
+        name: typeof entry.name === "string" ? entry.name : nameWithOwner.split("/")[1],
+        nameWithOwner,
+        description: typeof entry.description === "string" ? entry.description : "",
+        url: typeof entry.url === "string" ? entry.url : `https://github.com/${nameWithOwner}`,
+        isPrivate: entry.isPrivate === true,
+        isFork: entry.isFork === true,
+        pushedAt: typeof entry.pushedAt === "string" ? entry.pushedAt : null,
+        defaultBranch: typeof defaultBranch === "string" ? defaultBranch : null
+      });
+    }
+  }
+  repositories.sort((a, b) => (b.pushedAt || "").localeCompare(a.pushedAt || ""));
+  return { available: true, account, repositories, hint: null };
+}
+
+export async function cloneGitHubRepository(root: string, payload: GitActionPayload): Promise<void> {
+  const repo = textValue(payload.repo, 200);
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || repo.includes("..")) throw new Error("Wähle ein Repository im Format konto/name.");
+  const destination = await cloneDestination(root, payload.name);
+  try {
+    await gh(["repo", "clone", repo, destination], 180_000);
+  } catch (error) {
+    throw friendlyGitError(error);
+  }
 }

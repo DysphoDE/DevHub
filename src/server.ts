@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, getAppDirectory, saveScanRoot } from "./config.js";
-import { advancedGitActions, readGitWorkspace, readGitStash, readGitStats, readGitComparison, initializeGitRepository, cloneGitRepository, readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
+import { advancedGitActions, readGitWorkspace, readGitStash, readGitStats, readGitComparison, initializeGitRepository, cloneGitRepository, cloneGitHubRepository, listGitHubRepositories, readGitBranches, readGitCommit, readGitDiff, readGitHistory, runGitAction, suggestGitCommitMessage, type GitAction, type GitActionPayload } from "./git-actions.js";
 import { ProcessManager } from "./process-manager.js";
 import { readGitInfo, scanWorkspace } from "./scanner.js";
 import { isStackAction } from "./stack.js";
@@ -401,6 +401,23 @@ const server = createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, { branches: await readGitBranches(project) });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/git/github/repositories") {
+      sendJson(response, 200, await listGitHubRepositories());
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/git/github/clone") {
+      if (!requireToken(request, response)) return;
+      if (cloningRepository) throw new Error("Es läuft bereits ein Klonvorgang.");
+      cloningRepository = true;
+      try {
+        await cloneGitHubRepository(config.scanRoot, await readJsonBody(request));
+        await refreshProjects();
+        sendJson(response, 200, { message: "Repository von GitHub geklont.", projects: publicProjects() });
+      } finally { cloningRepository = false; }
       return;
     }
 

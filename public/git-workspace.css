@@ -1,9 +1,10 @@
 /* Git workspace: a dark header that carries the three decisions (repository, branch, sync), a light working surface
    and a tinted composer. Surfaces are separated by tone, not by borders; the accent marks the one primary action. */
 .git-page-active { background: #f4f6f8; }
-.git-page { width: 100%; min-width: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; color: #263347; font: var(--type-body)/1.5 var(--body);
-  --gw-border: #e3e7ee; --gw-muted: #778394; --gw-ink: #26334a; --gw-blue: #3559dd; --gw-soft: #edf2ff; --gw-surface: #fff; --gw-surface-2: #f5f7fa;
+/* The dialog lives on <body>, outside .git-page, so both carry the token set. */
+.git-page,.gw-dialog { --gw-border: #e3e7ee; --gw-muted: #778394; --gw-ink: #26334a; --gw-blue: #3559dd; --gw-soft: #edf2ff; --gw-surface: #fff; --gw-surface-2: #f5f7fa;
   --gw-accent: #d9662c; --gw-accent-dark: #bf5420; --gw-accent-soft: #fbeee6; --gw-head: #1c2536; --gw-head-ink: #e8edf5; --gw-head-muted: #8fa0ba; }
+.git-page { width: 100%; min-width: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; color: #263347; font: var(--type-body)/1.5 var(--body); }
 
 .gw-shell { display: flex; flex-direction: column; flex: 1; min-height: 0; border: 1px solid #d8dee8; border-radius: 12px; overflow: hidden; background: #fff; box-shadow: 0 6px 28px #25354e08, 0 1px 2px #25354e0a; }
 .gw-main { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; background: #fff; }
@@ -383,6 +384,20 @@
 .gw-field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 17px; }.gw-field > span { font-size: var(--type-micro); font-weight: 500; color: #617a9d; }.gw-field input,.gw-field select { width: 100%; padding: 9px 11px; border: 1px solid #dae3f0; border-radius: 6px; background: white; color: #46546a; font: var(--type-caption)/1.5 var(--body); }.gw-field input::placeholder { color: #8a9bb4; }
 .gw-activity > div { display: flex; align-items: flex-start; gap: 8px; padding: 12px 15px; font-size: var(--type-micro); color: #6f8f7d; border-bottom: 1px solid #f0f3f8; }.gw-activity span { flex: 1; }.gw-activity time { color: #b5c1d2; white-space: nowrap; }.gw-activity .error { color: #a5565b; }
 .gw-limit { padding: 14px; color: #a49b84; background: #fffcf5; font-size: var(--type-micro); }
+
+/* GitHub section inside the add dialog */
+.gw-github { margin-bottom: 4px; border: 1px solid #e1e8f3; border-radius: 9px; overflow: hidden; background: #fff; }
+.gw-github > header { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid #eef1f6; background: #fafbfd; color: #3f5170; font-size: var(--type-caption); }
+.gw-github > header > i { color: #5470d9; }
+.gw-github > header strong { font-weight: 600; }
+.gw-github > header small { flex: 1; color: #7b8798; font-size: var(--type-micro); }
+.gw-github > .gw-search { margin: 8px 8px 4px; height: 32px; }
+.gw-github-list { max-height: 240px; overflow: auto; padding: 2px 6px 6px; }
+.gw-github-list .gw-menu-row { width: 100%; }
+.gw-github-list .gw-menu-main > small { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+.gw-github-note { display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 10px; color: #718099; font-size: var(--type-micro); line-height: 1.6; }
+.gw-github-note > i { color: #8797b0; flex: 0 0 auto; }
+.gw-dialog .gw-dialog-divider:first-of-type { margin-top: 18px; }
 
 /* Dialog */
 .gw-dialog { width: min(550px,calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 0; color: #405473; border: 1px solid #dce4f0; background: #fff; border-radius: 12px; box-shadow: 0 24px 90px #18294530; }
